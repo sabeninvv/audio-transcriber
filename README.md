@@ -66,7 +66,7 @@ Optional quality controls:
 
 Diarization controls:
 
-- `TRANSCRIPTION_DIARIZATION_ENABLED` (`true`/`false`, default: `true`)
+- `TRANSCRIPTION_DIARIZATION_ENABLED` (`true`/`false`, default: `false`)
 - `TRANSCRIPTION_DIARIZATION_MODEL` (default: `gpt-4o-transcribe-diarize`)
 - `TRANSCRIPTION_KNOWN_SPEAKER_NAMES` (comma-separated, up to 4)
 - `TRANSCRIPTION_KNOWN_SPEAKER_REFERENCES` (`|`-separated or newline-separated data URLs, same count as names)
@@ -74,7 +74,7 @@ Diarization controls:
 Notes:
 
 - `TRANSCRIPTION_KEYWORDS` entries cannot include `<`, `>`, carriage return, or newline.
-- Set `TRANSCRIPTION_DIARIZATION_ENABLED=false` to keep transcript-only output.
+- Set `TRANSCRIPTION_DIARIZATION_ENABLED=true` to add speaker labels. This is slower than the default transcript-only path.
 - `gpt-transcribe` uses `languages` and `keywords` through request `extra_body`.
 - `gpt-4o-transcribe-diarize` does not support prompt/keywords and is intended only when speaker labeling is required.
 
@@ -100,6 +100,9 @@ export OPENAI_API_KEY="your_openai_api_key"
 
 
 uv run --env-file ~/.envs/openai.env main.py --input media/audio/ --output transcripts/
+
+TRANSCRIPTION_DIARIZATION_ENABLED=true \
+uv run --env-file ~/.envs/openai.env main.py --input media/audio/ --output transcripts/
 ```
 
 The CLI also accepts a directory path for `--input`.
@@ -123,24 +126,3 @@ Generated Markdown files include:
 - working format (`mp3`)
 - merged transcript text
 - speaker timeline section when diarization mode is enabled
-
-## Quality Baseline and Gate
-
-Build a baseline report from transcript markdown files:
-
-```bash
-uv run python -m audio_transcriber.quality_gate baseline \
-  --input-dir transcripts \
-  --output docs/quality/baseline.json
-```
-
-Compare candidate results with baseline:
-
-```bash
-uv run python -m audio_transcriber.quality_gate compare \
-  --baseline docs/quality/baseline.json \
-  --candidate docs/quality/candidate.json \
-  --min-cjk-reduction 90
-```
-
-The compare command returns exit code `0` on pass and `1` on quality regression.
