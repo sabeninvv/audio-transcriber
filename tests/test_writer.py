@@ -39,6 +39,29 @@ def test_render_transcript_markdown_includes_metadata_and_body() -> None:
     )
 
 
+def test_render_transcript_markdown_puts_each_sentence_on_its_own_line() -> None:
+    generated_at = datetime(2026, 4, 7, 12, 30, 11, tzinfo=timezone.utc)
+
+    markdown = render_transcript_markdown(
+        source_name="meeting.wav",
+        generated_at=generated_at,
+        chunk_count=2,
+        original_format="wav",
+        transcript_text="Hello. How are you? Fine! It's 3.14 now.\n\nNext chunk. Done.",
+    )
+
+    assert (
+        "## Transcript\n\n"
+        "Hello.\n"
+        "How are you?\n"
+        "Fine!\n"
+        "It's 3.14 now.\n"
+        "\n"
+        "Next chunk.\n"
+        "Done.\n"
+    ) in markdown
+
+
 def test_render_transcript_markdown_includes_speaker_sections_when_present() -> None:
     generated_at = datetime(2026, 4, 7, 12, 30, 11, tzinfo=timezone.utc)
 

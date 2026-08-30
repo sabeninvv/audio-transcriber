@@ -1,7 +1,11 @@
+import re
 from datetime import datetime
 from typing import Sequence
 
 from audio_transcriber.openai_client import TranscriptionSegment
+
+# ponytail: naive split, abbreviation list (Mr./т.е.) if false breaks matter
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?…])[^\S\n]+")
 
 
 def generate_markdown_filename(
@@ -31,7 +35,7 @@ def render_transcript_markdown(
         f"- Original format: {original_format}\n"
         "- Working format: mp3\n\n"
         "## Transcript\n\n"
-        f"{transcript_text.rstrip()}\n"
+        f"{_break_sentences(transcript_text)}\n"
     )
     if not speaker_segments:
         return markdown
@@ -45,6 +49,10 @@ def render_transcript_markdown(
         "## Speaker Transcript\n\n"
         f"{speaker_lines}\n"
     )
+
+
+def _break_sentences(text: str) -> str:
+    return _SENTENCE_BREAK.sub("\n", text.strip())
 
 
 def _format_seconds(value: float) -> str:
