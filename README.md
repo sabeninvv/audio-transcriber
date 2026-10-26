@@ -27,9 +27,15 @@ result_path = await transcribe_audio(
     input_path=Path("/tmp/meeting.wav"),
     output_dir=Path("/tmp/transcripts"),
 )
+
+subtitle_path = await transcribe_audio(
+    input_path=Path("/tmp/meeting.wav"),
+    output_dir=Path("/tmp/subtitles"),
+    output_format="srt",
+)
 ```
 
-The public Python API accepts a single media file per call.
+The public Python API accepts a single media file per call. `output_format` is `md` by default and `srt` for YouTube-compatible subtitles.
 
 ## Supported Formats
 
@@ -48,7 +54,8 @@ The module:
 - splits large files into smaller `mp3` chunks before upload
 - sends chunk continuity context between chunk requests
 - calls OpenAI transcription API with `gpt-transcribe` by default
-- writes merged output to `{INPUT_FILE_NAME}_{timestamp}.md`
+- writes merged output to `{INPUT_FILE_NAME}_{timestamp}.md` by default
+- writes `{INPUT_FILE_NAME}_{timestamp}.srt` when `output_format="srt"`
 
 ## Configuration
 
@@ -77,6 +84,8 @@ Notes:
 - Set `TRANSCRIPTION_DIARIZATION_ENABLED=true` to add speaker labels. This is slower than the default transcript-only path.
 - `gpt-transcribe` uses `languages` and `keywords` through request `extra_body`.
 - `gpt-4o-transcribe-diarize` does not support prompt/keywords and is intended only when speaker labeling is required.
+- SRT output uses `whisper-1` segment timestamps and splits audio into 30-second requests so the model does not repeat an earlier phrase. OpenAI plans to shut that model down on 2027-02-26.
+- SRT output cannot be combined with `TRANSCRIPTION_DIARIZATION_ENABLED=true`.
 
 ## Telegram Bot Usage
 
@@ -100,6 +109,8 @@ export OPENAI_API_KEY="your_openai_api_key"
 
 
 uv run --env-file ~/.envs/openai.env main.py --input media/audio/ --output transcripts/
+
+uv run --env-file ~/.envs/openai.env main.py --input media/audio/ --output subtitles/ --format srt
 
 TRANSCRIPTION_DIARIZATION_ENABLED=true \
 uv run --env-file ~/.envs/openai.env main.py --input media/audio/ --output transcripts/
@@ -126,3 +137,5 @@ Generated Markdown files include:
 - working format (`mp3`)
 - merged transcript text
 - speaker timeline section when diarization mode is enabled
+
+Generated SRT files contain numbered cues, `HH:MM:SS,mmm` ranges, and cue text. They do not include speaker labels.

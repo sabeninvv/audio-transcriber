@@ -15,7 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Transcribe a local media file (mp3/wav/mp4/avi/webm/m4a/ogg/oga) "
             "or a directory of media "
-            "files into markdown transcripts."
+            "files into markdown transcripts or SRT subtitles."
         ),
     )
     parser.add_argument(
@@ -29,12 +29,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output",
         required=True,
-        help="Directory where the generated markdown file will be stored.",
+        help="Directory where the generated transcript or subtitle file will be stored.",
+    )
+    parser.add_argument(
+        "--format",
+        choices=("md", "srt"),
+        default="md",
+        help="Output format: md transcript or srt subtitles. Defaults to md.",
     )
     return parser
 
 
-async def transcribe_directory(input_dir: Path, output_dir: Path) -> tuple[list[Path], list[str], bool, bool]:
+async def transcribe_directory(
+    input_dir: Path,
+    output_dir: Path,
+    *,
+    output_format: str,
+) -> tuple[list[Path], list[str], bool, bool]:
     result_paths: list[Path] = []
     stderr_lines: list[str] = []
     found_supported_media = False
@@ -50,7 +61,11 @@ async def transcribe_directory(input_dir: Path, output_dir: Path) -> tuple[list[
         found_supported_media = True
         try:
             result_paths.append(
-                await transcribe_audio(input_path=candidate_path, output_dir=output_dir)
+                await transcribe_audio(
+                    input_path=candidate_path,
+                    output_dir=output_dir,
+                    output_format=output_format,
+                )
             )
         except Exception as error:
             had_failures = True
@@ -68,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if input_path.is_dir():
         result_paths, stderr_lines, found_supported_media, had_failures = asyncio.run(
-            transcribe_directory(input_path, output_dir)
+            transcribe_directory(input_path, output_dir, output_format=args.format)
         )
         for result_path in result_paths:
             print(result_path)
@@ -87,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
             transcribe_audio(
                 input_path=input_path,
                 output_dir=output_dir,
+                output_format=args.format,
             )
         )
     except TranscriptionError as error:

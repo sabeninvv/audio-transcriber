@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -8,9 +9,11 @@ from audio_transcriber.audio import (
     ensure_ffmpeg_available,
     normalize_to_mp3,
     probe_audio_metadata,
+    split_mp3_into_chunks,
     validate_audio_path,
 )
 from audio_transcriber.exceptions import (
+    AudioChunkingError,
     FfmpegNotAvailableError,
     UnsupportedAudioFormatError,
 )
@@ -143,3 +146,85 @@ def test_normalize_to_mp3_uses_common_ffmpeg_call_for_webm(
         audio_module.DEFAULT_MP3_BITRATE,
         str(output_path),
     ]
+
+
+def test_split_mp3_chunks_stay_on_parent_timeline(tmp_path: Path) -> None:
+    source = tmp_path / "tone.wav"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=30", "-ac", "1", str(source)],
+        check=True,
+        capture_output=True,
+    )
+    normalized = normalize_to_mp3(source, tmp_path / "norm.mp3")
+    chunks = split_mp3_into_chunks(normalized, tmp_path / "chunks", chunk_duration_seconds=2)
+
+    durations = [probe_audio_metadata(chunk).duration_seconds for chunk in chunks]
+    parent_duration = probe_audio_metadata(normalized).duration_seconds
+    frame_seconds = 1152 / 44100
+    covered = sum(durations)
+
+    assert covered <= parent_duration + 0.001
+    assert parent_duration - covered <= frame_seconds + 0.001
+    rows = [
+        line.split(",")
+        for line in (tmp_path / "chunks" / "segments.csv").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert abs(float(rows[0][1])) < 0.001
+    assert abs(sum(durations) - float(rows[len(chunks) - 1][2])) < 0.001
+
+
+def test_unreadable_partial_frame_tail_is_omitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from audio_transcriber.audio import _without_undecodable_tail
+
+    good = tmp_path / "chunk_0001.mp3"
+    tail = tmp_path / "chunk_0002.mp3"
+    good.write_bytes(b"good")
+    tail.write_bytes(b"tail")
+
+    def fake_probe(path: str | Path) -> audio_module.AudioMetadata:
+        if Path(path).name == "chunk_0002.mp3":
+            raise AudioChunkingError("invalid frame")
+        return audio_module.AudioMetadata(duration_seconds=2.0, bitrate_bps=64_000)
+
+    monkeypatch.setattr(audio_module, "probe_audio_metadata", fake_probe)
+
+    kept = _without_undecodable_tail(
+        [good, tail],
+        [("chunk_0001.mp3", 0.0, 2.0), ("chunk_0002.mp3", 2.0, 2.026122)],
+        sample_rate=44_100,
+    )
+
+    assert kept == [good]
+    assert not tail.exists()
+
+
+def test_unreadable_chunk_longer_than_one_frame_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from audio_transcriber.audio import _without_undecodable_tail
+
+    good = tmp_path / "chunk_0001.mp3"
+    broken = tmp_path / "chunk_0002.mp3"
+    good.write_bytes(b"good")
+    broken.write_bytes(b"broken")
+
+    def fake_probe(path: str | Path) -> audio_module.AudioMetadata:
+        if Path(path).name == "chunk_0002.mp3":
+            raise AudioChunkingError("invalid frame")
+        return audio_module.AudioMetadata(duration_seconds=2.0, bitrate_bps=64_000)
+
+    monkeypatch.setattr(audio_module, "probe_audio_metadata", fake_probe)
+
+    with pytest.raises(AudioChunkingError, match="chunk_0002.mp3"):
+        _without_undecodable_tail(
+            [good, broken],
+            [("chunk_0001.mp3", 0.0, 2.0), ("chunk_0002.mp3", 2.0, 4.0)],
+            sample_rate=44_100,
+        )
+
+    assert broken.exists()

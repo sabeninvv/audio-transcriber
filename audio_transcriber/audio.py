@@ -1,7 +1,8 @@
 import json
+import logging
 import subprocess
 from dataclasses import dataclass
-from math import floor
+from math import floor, isfinite
 from pathlib import Path
 from shutil import which
 
@@ -11,7 +12,10 @@ from audio_transcriber.exceptions import (
     UnsupportedAudioFormatError,
 )
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_MP3_BITRATE = "64k"
+MP3_SAMPLES_PER_FRAME = 1152
 SUPPORTED_AUDIO_EXTENSIONS = {
     ".avi",
     ".m4a",
@@ -139,6 +143,8 @@ def split_mp3_into_chunks(
     output_directory = Path(output_dir)
     output_directory.mkdir(parents=True, exist_ok=True)
     output_pattern = output_directory / "chunk_%04d.mp3"
+    segment_list = output_directory / "segments.csv"
+    sample_rate = _audio_sample_rate(source)
 
     _run_command(
         [
@@ -152,6 +158,10 @@ def split_mp3_into_chunks(
             str(chunk_duration_seconds),
             "-segment_start_number",
             "1",
+            "-segment_list",
+            str(segment_list),
+            "-segment_list_type",
+            "csv",
             "-c",
             "copy",
             str(output_pattern),
@@ -161,7 +171,100 @@ def split_mp3_into_chunks(
     chunk_paths = sorted(output_directory.glob("chunk_*.mp3"))
     if not chunk_paths:
         raise AudioChunkingError("ffmpeg did not produce any chunk files.")
-    return chunk_paths
+    return _without_undecodable_tail(
+        chunk_paths,
+        _read_segment_rows(segment_list),
+        sample_rate=sample_rate,
+    )
+
+
+def _audio_sample_rate(path: Path) -> int:
+    result = _run_command(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=sample_rate",
+            "-of",
+            "json",
+            str(path),
+        ]
+    )
+    try:
+        sample_rate = int(json.loads(result.stdout)["streams"][0]["sample_rate"])
+    except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise AudioChunkingError("Unable to parse ffprobe sample rate.") from error
+    if sample_rate <= 0:
+        raise AudioChunkingError("Audio sample rate must be greater than zero.")
+    return sample_rate
+
+
+def _read_segment_rows(path: Path) -> list[tuple[str, float, float]]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise AudioChunkingError("ffmpeg did not write a segment list.") from error
+
+    rows: list[tuple[str, float, float]] = []
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        parts = line.split(",")
+        if len(parts) != 3:
+            raise AudioChunkingError(f"Unable to parse ffmpeg segment list line {line_number}.")
+        name, raw_start, raw_end = parts
+        try:
+            start = float(raw_start)
+            end = float(raw_end)
+        except ValueError as error:
+            raise AudioChunkingError(
+                f"Unable to parse ffmpeg segment list line {line_number}."
+            ) from error
+        if not isfinite(start) or not isfinite(end) or end < start:
+            raise AudioChunkingError(f"Invalid ffmpeg segment range on line {line_number}.")
+        rows.append((Path(name).name, start, end))
+    if not rows:
+        raise AudioChunkingError("ffmpeg segment list is empty.")
+    return rows
+
+
+def _without_undecodable_tail(
+    chunk_paths: list[Path],
+    rows: list[tuple[str, float, float]],
+    *,
+    sample_rate: int,
+) -> list[Path]:
+    spans = {name: end - start for name, start, end in rows}
+    kept: list[Path] = []
+    for index, chunk_path in enumerate(chunk_paths):
+        try:
+            probe_audio_metadata(chunk_path)
+        except AudioChunkingError as error:
+            span = spans.get(chunk_path.name)
+            # ponytail: drop only a final partial MP3 frame; re-mux a longer tail if it must be kept
+            span_samples = round(span * sample_rate) if span is not None else None
+            is_partial_tail = (
+                index == len(chunk_paths) - 1
+                and index > 0
+                and span_samples is not None
+                and span_samples <= MP3_SAMPLES_PER_FRAME
+            )
+            if not is_partial_tail:
+                raise AudioChunkingError(f"Chunk {chunk_path.name} is not readable.") from error
+            chunk_path.unlink()
+            logger.info(
+                "Omitting unreadable trailing MP3 frame %s span_samples=%s.",
+                chunk_path.name,
+                span_samples,
+            )
+            continue
+        kept.append(chunk_path)
+    if not kept:
+        raise AudioChunkingError("ffmpeg did not produce any readable chunk files.")
+    return kept
 
 
 def _run_command(command: list[str]) -> subprocess.CompletedProcess[str]:

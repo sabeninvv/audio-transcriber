@@ -15,15 +15,25 @@ from audio_transcriber.audio import (
     split_mp3_into_chunks,
     validate_audio_path,
 )
-from audio_transcriber.config import TranscriptionConfig, load_config
+from audio_transcriber.config import (
+    SUBTITLE_CHUNK_MAX_DURATION_SECONDS,
+    SUBTITLE_TRANSCRIPTION_MODEL,
+    TranscriptionConfig,
+    load_config,
+)
 from audio_transcriber.exceptions import AudioChunkingError, OpenAITranscriptionError
-from audio_transcriber.openai_client import (
-    OpenAITranscriptionClient,
+from audio_transcriber.models import (
+    OutputFormat,
     TranscriptionResult,
     TranscriptionSegment,
+    ensure_subtitles_allowed,
+    parse_output_format,
 )
+from audio_transcriber.openai_client import OpenAITranscriptionClient
 from audio_transcriber.writer import (
     generate_markdown_filename,
+    generate_subtitle_filename,
+    render_subtitles_srt,
     render_transcript_markdown,
 )
 
@@ -53,7 +63,11 @@ class TranscriptionService:
         output_dir: str | Path,
         *,
         config: TranscriptionConfig,
+        output_format: OutputFormat | str = OutputFormat.MARKDOWN,
     ) -> Path:
+        selected_format = parse_output_format(output_format)
+        if selected_format is OutputFormat.SRT:
+            ensure_subtitles_allowed(diarization_enabled=config.diarization_enabled)
         source_path = validate_audio_path(input_path)
         ensure_ffmpeg_available()
 
@@ -65,19 +79,28 @@ class TranscriptionService:
                 working_dir / "normalized.mp3",
             )
             metadata = await asyncio.to_thread(probe_audio_metadata, normalized_path)
+            chunk_max_duration_seconds = config.chunk_max_duration_seconds
+            if selected_format is OutputFormat.SRT:
+                # whisper-1 repeats its previous window on long requests.
+                chunk_max_duration_seconds = min(
+                    chunk_max_duration_seconds,
+                    SUBTITLE_CHUNK_MAX_DURATION_SECONDS,
+                )
             chunk_paths = await self._prepare_chunks(
                 normalized_path=normalized_path,
                 working_dir=working_dir,
                 duration_seconds=metadata.duration_seconds,
                 bitrate_bps=metadata.bitrate_bps,
                 chunk_max_bytes=config.chunk_max_bytes,
-                chunk_max_duration_seconds=config.chunk_max_duration_seconds,
+                chunk_max_duration_seconds=chunk_max_duration_seconds,
             )
 
             transcript_chunks: list[TranscriptionResult] = []
             chunk_offsets = await self._build_chunk_offsets(
                 chunk_paths=chunk_paths,
-                include_offsets=config.diarization_enabled,
+                include_offsets=(
+                    config.diarization_enabled or selected_format is OutputFormat.SRT
+                ),
             )
             prompt_suffix: str | None = None
             for chunk_index, chunk_path in enumerate(chunk_paths):
@@ -104,27 +127,34 @@ class TranscriptionService:
                 prompt_suffix = _tail_context(chunk_result.text, config.chunk_context_chars)
 
             generated_at = self._now_provider()
-            transcript_text = "\n\n".join(chunk.text for chunk in transcript_chunks)
-            speaker_segments = tuple(
+            cues = tuple(
                 segment
                 for chunk in transcript_chunks
                 for segment in chunk.segments
             )
-            markdown = render_transcript_markdown(
-                source_name=source_path.name,
-                generated_at=generated_at,
-                chunk_count=len(chunk_paths),
-                original_format=source_path.suffix.lstrip(".").lower(),
-                transcript_text=transcript_text,
-                speaker_segments=speaker_segments or None,
-            )
+            if selected_format is OutputFormat.SRT:
+                payload = render_subtitles_srt(cues)
+                output_name = generate_subtitle_filename(
+                    source_stem=source_path.stem,
+                    timestamp=generated_at,
+                )
+            else:
+                payload = render_transcript_markdown(
+                    source_name=source_path.name,
+                    generated_at=generated_at,
+                    chunk_count=len(chunk_paths),
+                    original_format=source_path.suffix.lstrip(".").lower(),
+                    transcript_text="\n\n".join(chunk.text for chunk in transcript_chunks),
+                    speaker_segments=cues or None,
+                )
+                output_name = generate_markdown_filename(
+                    source_stem=source_path.stem,
+                    timestamp=generated_at,
+                )
             output_directory = Path(output_dir)
             output_directory.mkdir(parents=True, exist_ok=True)
-            output_path = output_directory / generate_markdown_filename(
-                source_stem=source_path.stem,
-                timestamp=generated_at,
-            )
-            await asyncio.to_thread(output_path.write_text, markdown, "utf-8")
+            output_path = output_directory / output_name
+            await asyncio.to_thread(output_path.write_text, payload, "utf-8")
             return output_path
 
     async def _prepare_chunks(
@@ -217,11 +247,23 @@ class TranscriptionService:
         return offsets
 
 
-async def transcribe_audio(input_path: str | Path, output_dir: str | Path) -> Path:
+async def transcribe_audio(
+    input_path: str | Path,
+    output_dir: str | Path,
+    *,
+    output_format: OutputFormat | str = OutputFormat.MARKDOWN,
+) -> Path:
+    selected_format = parse_output_format(output_format)
     config = load_config()
+    if selected_format is OutputFormat.SRT:
+        ensure_subtitles_allowed(diarization_enabled=config.diarization_enabled)
     client = OpenAITranscriptionClient(
         api_key=config.openai_api_key,
-        model=config.model,
+        model=(
+            SUBTITLE_TRANSCRIPTION_MODEL
+            if selected_format is OutputFormat.SRT
+            else config.model
+        ),
         prompt=config.prompt,
         languages=config.languages,
         keywords=config.keywords,
@@ -229,9 +271,15 @@ async def transcribe_audio(input_path: str | Path, output_dir: str | Path) -> Pa
         diarization_model=config.diarization_model,
         known_speaker_names=config.known_speaker_names,
         known_speaker_references=config.known_speaker_references,
+        timestamps_enabled=selected_format is OutputFormat.SRT,
     )
     service = TranscriptionService(client)
-    return await service.transcribe_audio(input_path, output_dir, config=config)
+    return await service.transcribe_audio(
+        input_path,
+        output_dir,
+        config=config,
+        output_format=selected_format,
+    )
 
 
 def _tail_context(text: str, max_chars: int) -> str | None:

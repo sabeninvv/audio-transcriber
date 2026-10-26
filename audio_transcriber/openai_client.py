@@ -1,5 +1,5 @@
 import logging
-from dataclasses import dataclass
+import math
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -11,24 +11,15 @@ from audio_transcriber.config import (
     DEFAULT_TRANSCRIPTION_LANGUAGES,
     DEFAULT_TRANSCRIPTION_MODEL,
     DEFAULT_TRANSCRIPTION_PROMPT,
+    SUBTITLE_TRANSCRIPTION_MODEL,
 )
 from audio_transcriber.exceptions import OpenAITranscriptionError
+from audio_transcriber.models import TranscriptionResult, TranscriptionSegment, ensure_subtitles_allowed
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass(frozen=True, slots=True)
-class TranscriptionSegment:
-    start_seconds: float
-    end_seconds: float
-    speaker: str
-    text: str
-
-
-@dataclass(frozen=True, slots=True)
-class TranscriptionResult:
-    text: str
-    segments: tuple[TranscriptionSegment, ...] = ()
+# Documented whisper-1 failure threshold: higher means the segment text collapsed.
+_WHISPER_MAX_COMPRESSION_RATIO = 2.4
 
 
 class SupportsAsyncTranscriptions(Protocol):
@@ -48,8 +39,12 @@ class OpenAITranscriptionClient:
         diarization_model: str = DEFAULT_DIARIZATION_MODEL,
         known_speaker_names: tuple[str, ...] = (),
         known_speaker_references: tuple[str, ...] = (),
+        timestamps_enabled: bool = False,
         client: AsyncOpenAI | SupportsAsyncTranscriptions | None = None,
     ) -> None:
+        if timestamps_enabled:
+            ensure_subtitles_allowed(diarization_enabled=diarization_enabled)
+        self._timestamps_enabled = timestamps_enabled
         self._model = model
         self._prompt = prompt
         self._languages = languages
@@ -68,6 +63,13 @@ class OpenAITranscriptionClient:
     ) -> TranscriptionResult:
         try:
             with path.open("rb") as audio_file:
+                if self._timestamps_enabled:
+                    response = await self._create_timestamped_transcription(audio_file=audio_file)
+                    return TranscriptionResult(
+                        text=_extract_transcript_text(response),
+                        segments=_extract_timestamped_segments(response),
+                    )
+
                 if self._diarization_enabled:
                     response = await self._create_diarized_transcription(audio_file)
                     return TranscriptionResult(
@@ -84,7 +86,7 @@ class OpenAITranscriptionClient:
             logger.exception(
                 "OpenAI transcription request failed for model=%s file=%s "
                 "error_type=%s status_code=%s request_id=%s body=%r response_text=%r",
-                self._diarization_model if self._diarization_enabled else self._model,
+                self._active_model(),
                 path,
                 type(error).__name__,
                 getattr(error, "status_code", None),
@@ -123,6 +125,26 @@ class OpenAITranscriptionClient:
             request_kwargs["language"] = self._languages[0]
 
         return await self._client.audio.transcriptions.create(**request_kwargs)
+
+    async def _create_timestamped_transcription(self, *, audio_file: Any) -> Any:
+        # whisper-1 treats prompt as previously spoken text and then repeats it.
+        request_kwargs: dict[str, Any] = {
+            "file": audio_file,
+            "model": SUBTITLE_TRANSCRIPTION_MODEL,
+            "response_format": "verbose_json",
+            "timestamp_granularities": ["segment"],
+        }
+        # whisper-1 accepts one language; several configured languages stay on auto-detect.
+        if len(self._languages) == 1:
+            request_kwargs["language"] = self._languages[0]
+        return await self._client.audio.transcriptions.create(**request_kwargs)
+
+    def _active_model(self) -> str:
+        if self._timestamps_enabled:
+            return SUBTITLE_TRANSCRIPTION_MODEL
+        if self._diarization_enabled:
+            return self._diarization_model
+        return self._model
 
     async def _create_diarized_transcription(self, audio_file: Any) -> Any:
         request_kwargs: dict[str, Any] = {
@@ -185,6 +207,67 @@ def _extract_diarized_segments(response: Any) -> tuple[TranscriptionSegment, ...
         )
 
     return tuple(segments)
+
+
+def _extract_timestamped_segments(response: Any) -> tuple[TranscriptionSegment, ...]:
+    raw_segments = _coerce_response_value(response, "segments")
+    if not isinstance(raw_segments, list) or not raw_segments:
+        raise OpenAITranscriptionError("OpenAI response does not include transcript segments.")
+
+    segments: list[TranscriptionSegment] = []
+    previous_start: float | None = None
+    for index, item in enumerate(raw_segments, start=1):
+        start = _require_timestamp(item, "start", index)
+        end = _require_timestamp(item, "end", index)
+        if start < 0 or start >= end:
+            logger.info(
+                "Omitting whisper segment index=%s because its time range %s..%s is invalid.",
+                index,
+                start,
+                end,
+            )
+            continue
+        if previous_start is not None and start < previous_start:
+            raise OpenAITranscriptionError(f"OpenAI transcript segment {index} is out of order.")
+        previous_start = start
+        text = _coerce_response_value(item, "text")
+        if not isinstance(text, str) or not text.strip():
+            logger.info("Omitting whisper segment index=%s because it has no text.", index)
+            continue
+        if _whisper_segment_repeated(item):
+            logger.info(
+                "Omitting repeated whisper segment index=%s compression_ratio=%s.",
+                index,
+                _coerce_response_value(item, "compression_ratio"),
+            )
+            continue
+        segments.append(
+            TranscriptionSegment(
+                start_seconds=start,
+                end_seconds=end,
+                speaker="",
+                text=text.strip(),
+            )
+        )
+    if not segments:
+        raise OpenAITranscriptionError("OpenAI response does not include transcript segments.")
+    return tuple(segments)
+
+
+def _whisper_segment_repeated(segment: Any) -> bool:
+    value = _coerce_response_value(segment, "compression_ratio")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return False
+    return value > _WHISPER_MAX_COMPRESSION_RATIO
+
+
+def _require_timestamp(container: Any, field: str, index: int) -> float:
+    value = _coerce_response_value(container, field)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise OpenAITranscriptionError(
+            f"OpenAI transcript segment {index} does not include a {field} timestamp."
+        )
+    return float(value)
 
 
 def _coerce_response_value(container: Any, field: str) -> Any:
