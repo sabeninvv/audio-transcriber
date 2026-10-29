@@ -19,7 +19,7 @@ from audio_transcriber.exceptions import (
 )
 
 
-@pytest.mark.parametrize("extension", [".wav", ".mp3", ".mp4", ".avi", ".webm", ".ogg", ".oga", ".m4a"])
+@pytest.mark.parametrize("extension", [".wav", ".mp3", ".mp4", ".mov", ".avi", ".webm", ".ogg", ".oga", ".m4a"])
 def test_validate_audio_path_accepts_supported_extensions(
     tmp_path: Path,
     extension: str,
@@ -30,7 +30,7 @@ def test_validate_audio_path_accepts_supported_extensions(
     assert validate_audio_path(input_path) == input_path
 
 
-@pytest.mark.parametrize("extension", [".wav", ".mp3", ".mp4", ".avi", ".webm", ".ogg", ".oga", ".m4a"])
+@pytest.mark.parametrize("extension", [".wav", ".mp3", ".mp4", ".mov", ".avi", ".webm", ".ogg", ".oga", ".m4a"])
 def test_is_supported_audio_path_accepts_supported_extensions(
     tmp_path: Path,
     extension: str,

@@ -4,12 +4,24 @@ Async Python module for transcribing local media files with the OpenAI Audio API
 
 ## Requirements
 
-- Python `3.12`
+- Python `3.14` (pinned in `.python-version`)
 - [`uv`](https://docs.astral.sh/uv/)
 - `ffmpeg` and `ffprobe` available on `PATH`
 - `OPENAI_API_KEY` in the environment
 
 ## Install Dependencies
+
+Install `ffmpeg` (it ships with `ffprobe`):
+
+```bash
+# macOS
+brew install ffmpeg
+
+# Debian / Ubuntu
+sudo apt-get update && sudo apt-get install -y ffmpeg
+```
+
+Then install Python dependencies:
 
 ```bash
 uv sync
@@ -42,6 +54,7 @@ The public Python API accepts a single media file per call. `output_format` is `
 - `mp3`
 - `wav`
 - `mp4`
+- `mov`
 - `avi`
 - `webm`
 - `m4a`

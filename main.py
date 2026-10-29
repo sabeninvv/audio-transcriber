@@ -23,7 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help=(
             "Path to the input media file or directory "
-            "(.mp3, .wav, .mp4, .avi, .webm, .m4a, .ogg, or .oga)."
+            "(.mp3, .wav, .mp4, .mov, .avi, .webm, .m4a, .ogg, or .oga)."
         ),
     )
     parser.add_argument(

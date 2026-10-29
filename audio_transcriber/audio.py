@@ -20,6 +20,7 @@ SUPPORTED_AUDIO_EXTENSIONS = {
     ".avi",
     ".m4a",
     ".mp3",
+    ".mov",
     ".mp4",
     ".oga",
     ".ogg",
