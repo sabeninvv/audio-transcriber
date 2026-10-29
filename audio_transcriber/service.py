@@ -17,7 +17,6 @@ from audio_transcriber.audio import (
 )
 from audio_transcriber.config import (
     SUBTITLE_CHUNK_MAX_DURATION_SECONDS,
-    SUBTITLE_TRANSCRIPTION_MODEL,
     TranscriptionConfig,
     load_config,
 )
@@ -259,16 +258,13 @@ async def transcribe_audio(
         ensure_subtitles_allowed(diarization_enabled=config.diarization_enabled)
     client = OpenAITranscriptionClient(
         api_key=config.openai_api_key,
-        model=(
-            SUBTITLE_TRANSCRIPTION_MODEL
-            if selected_format is OutputFormat.SRT
-            else config.model
-        ),
+        model=config.model,
         prompt=config.prompt,
         languages=config.languages,
         keywords=config.keywords,
         diarization_enabled=config.diarization_enabled,
         diarization_model=config.diarization_model,
+        subtitle_model=config.subtitle_model,
         known_speaker_names=config.known_speaker_names,
         known_speaker_references=config.known_speaker_references,
         timestamps_enabled=selected_format is OutputFormat.SRT,

@@ -7,11 +7,12 @@ from openai import AsyncOpenAI, OpenAIError
 
 from audio_transcriber.config import (
     DEFAULT_DIARIZATION_MODEL,
+    DEFAULT_SUBTITLE_MODEL,
     DEFAULT_TRANSCRIPTION_KEYWORDS,
     DEFAULT_TRANSCRIPTION_LANGUAGES,
     DEFAULT_TRANSCRIPTION_MODEL,
     DEFAULT_TRANSCRIPTION_PROMPT,
-    SUBTITLE_TRANSCRIPTION_MODEL,
+    OPENAI_MODEL_PREFIX,
 )
 from audio_transcriber.exceptions import OpenAITranscriptionError
 from audio_transcriber.models import TranscriptionResult, TranscriptionSegment, ensure_subtitles_allowed
@@ -37,6 +38,7 @@ class OpenAITranscriptionClient:
         keywords: tuple[str, ...] = DEFAULT_TRANSCRIPTION_KEYWORDS,
         diarization_enabled: bool = False,
         diarization_model: str = DEFAULT_DIARIZATION_MODEL,
+        subtitle_model: str = DEFAULT_SUBTITLE_MODEL,
         known_speaker_names: tuple[str, ...] = (),
         known_speaker_references: tuple[str, ...] = (),
         timestamps_enabled: bool = False,
@@ -51,6 +53,7 @@ class OpenAITranscriptionClient:
         self._keywords = keywords
         self._diarization_enabled = diarization_enabled
         self._diarization_model = diarization_model
+        self._subtitle_model = subtitle_model
         self._known_speaker_names = known_speaker_names
         self._known_speaker_references = known_speaker_references
         self._client = client or AsyncOpenAI(api_key=api_key)
@@ -112,7 +115,7 @@ class OpenAITranscriptionClient:
         if prompt:
             request_kwargs["prompt"] = prompt
 
-        if self._model == "gpt-transcribe":
+        if self._model.removeprefix(OPENAI_MODEL_PREFIX) == DEFAULT_TRANSCRIPTION_MODEL:
             extra_body: dict[str, list[str]] = {}
             if self._languages:
                 extra_body["languages"] = list(self._languages)
@@ -130,7 +133,7 @@ class OpenAITranscriptionClient:
         # whisper-1 treats prompt as previously spoken text and then repeats it.
         request_kwargs: dict[str, Any] = {
             "file": audio_file,
-            "model": SUBTITLE_TRANSCRIPTION_MODEL,
+            "model": self._subtitle_model,
             "response_format": "verbose_json",
             "timestamp_granularities": ["segment"],
         }
@@ -141,7 +144,7 @@ class OpenAITranscriptionClient:
 
     def _active_model(self) -> str:
         if self._timestamps_enabled:
-            return SUBTITLE_TRANSCRIPTION_MODEL
+            return self._subtitle_model
         if self._diarization_enabled:
             return self._diarization_model
         return self._model

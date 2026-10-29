@@ -7,7 +7,9 @@ from audio_transcriber.exceptions import TranscriptionError
 
 DEFAULT_TRANSCRIPTION_MODEL = "gpt-transcribe"
 DEFAULT_DIARIZATION_MODEL = "gpt-4o-transcribe-diarize"
-SUBTITLE_TRANSCRIPTION_MODEL = "whisper-1"
+DEFAULT_SUBTITLE_MODEL = "whisper-1"
+# Префикс моделей OpenAI в каталоге OpenRouter.
+OPENAI_MODEL_PREFIX = "openai/"
 SUBTITLE_CHUNK_MAX_DURATION_SECONDS = 30
 DEFAULT_DIARIZATION_ENABLED = False
 DEFAULT_CHUNK_MAX_BYTES = 24 * 1024 * 1024
@@ -40,6 +42,7 @@ class TranscriptionConfig:
     chunk_context_chars: int = DEFAULT_CHUNK_CONTEXT_CHARS
     diarization_enabled: bool = DEFAULT_DIARIZATION_ENABLED
     diarization_model: str = DEFAULT_DIARIZATION_MODEL
+    subtitle_model: str = DEFAULT_SUBTITLE_MODEL
     known_speaker_names: tuple[str, ...] = ()
     known_speaker_references: tuple[str, ...] = ()
     chunk_max_bytes: int = DEFAULT_CHUNK_MAX_BYTES
@@ -77,6 +80,13 @@ def load_config(env: Mapping[str, str] | None = None) -> TranscriptionConfig:
         )
     )
     diarization_model = source.get("TRANSCRIPTION_DIARIZATION_MODEL", DEFAULT_DIARIZATION_MODEL).strip()
+    subtitle_model = source.get("TRANSCRIPTION_SUBTITLE_MODEL", DEFAULT_SUBTITLE_MODEL).strip()
+    if subtitle_model.removeprefix(OPENAI_MODEL_PREFIX) != DEFAULT_SUBTITLE_MODEL:
+        # SRT-путь опирается на verbose_json и compression_ratio, которые отдаёт только whisper.
+        raise TranscriptionError(
+            f"TRANSCRIPTION_SUBTITLE_MODEL must be {DEFAULT_SUBTITLE_MODEL} "
+            f"or {OPENAI_MODEL_PREFIX}{DEFAULT_SUBTITLE_MODEL}."
+        )
     known_speaker_names = _parse_csv_values(source.get("TRANSCRIPTION_KNOWN_SPEAKER_NAMES"))
     known_speaker_references = _parse_reference_values(
         source.get("TRANSCRIPTION_KNOWN_SPEAKER_REFERENCES")
@@ -103,6 +113,7 @@ def load_config(env: Mapping[str, str] | None = None) -> TranscriptionConfig:
         chunk_context_chars=chunk_context_chars,
         diarization_enabled=diarization_enabled,
         diarization_model=diarization_model,
+        subtitle_model=subtitle_model,
         known_speaker_names=known_speaker_names,
         known_speaker_references=known_speaker_references,
     )

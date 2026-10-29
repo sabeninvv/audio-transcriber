@@ -7,7 +7,7 @@ Async Python module for transcribing local media files with the OpenAI Audio API
 - Python `3.14` (pinned in `.python-version`)
 - [`uv`](https://docs.astral.sh/uv/)
 - `ffmpeg` and `ffprobe` available on `PATH`
-- `OPENAI_API_KEY` in the environment
+- `OPENAI_API_KEY` in the environment (an OpenAI or OpenRouter key)
 
 ## Install Dependencies
 
@@ -79,6 +79,7 @@ Required:
 Optional quality controls:
 
 - `TRANSCRIPTION_MODEL` (default: `gpt-transcribe`)
+- `TRANSCRIPTION_SUBTITLE_MODEL` (default: `whisper-1`, used for SRT output; only `whisper-1` or `openai/whisper-1`)
 - `TRANSCRIPTION_PROMPT`
 - `TRANSCRIPTION_LANGUAGES` (comma-separated, default: `ru,en`)
 - `TRANSCRIPTION_KEYWORDS` (comma-separated glossary)
@@ -99,6 +100,25 @@ Notes:
 - `gpt-4o-transcribe-diarize` does not support prompt/keywords and is intended only when speaker labeling is required.
 - SRT output uses `whisper-1` segment timestamps and splits audio into 30-second requests so the model does not repeat an earlier phrase. OpenAI plans to shut that model down on 2027-02-26.
 - SRT output cannot be combined with `TRANSCRIPTION_DIARIZATION_ENABLED=true`.
+
+## OpenRouter
+
+The OpenAI SDK reads `OPENAI_BASE_URL`, so OpenRouter needs only environment variables:
+
+```bash
+OPENAI_API_KEY=<openrouter key>
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
+TRANSCRIPTION_MODEL=openai/gpt-transcribe
+TRANSCRIPTION_SUBTITLE_MODEL=openai/whisper-1
+```
+
+Limitations on OpenRouter:
+
+- `prompt` is accepted but ignored, so `TRANSCRIPTION_PROMPT` and previous-chunk context have no effect.
+- There is no diarization model, so keep `TRANSCRIPTION_DIARIZATION_ENABLED=false`.
+- Upstream requests time out after 60 seconds.
+
+To switch back to OpenAI, unset `OPENAI_BASE_URL`, put an OpenAI key into `OPENAI_API_KEY`, and drop the `openai/` prefix from the models (or unset them to use the defaults). Keep one env file per provider and pick it with `uv run --env-file ...`; a value exported in the shell overrides the file.
 
 ## Telegram Bot Usage
 

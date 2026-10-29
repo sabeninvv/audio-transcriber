@@ -8,7 +8,10 @@ from openai import OpenAIError
 
 import audio_transcriber.service as service_module
 from audio_transcriber.audio import AudioMetadata, calculate_chunk_duration_seconds
-from audio_transcriber.config import TranscriptionConfig
+from audio_transcriber.config import DEFAULT_SUBTITLE_MODEL, TranscriptionConfig
+
+OPENROUTER_TRANSCRIPTION_MODEL = "openai/gpt-transcribe"
+OPENROUTER_SUBTITLE_MODEL = "openai/whisper-1"
 from audio_transcriber.exceptions import OpenAITranscriptionError, TranscriptionError
 from audio_transcriber.openai_client import (
     OpenAITranscriptionClient,
@@ -16,59 +19,12 @@ from audio_transcriber.openai_client import (
     TranscriptionSegment,
 )
 from audio_transcriber.service import TranscriptionService
-
-
-class FakeTranscriptionsEndpoint:
-    def __init__(self, *, response: object | None = None, error: Exception | None = None) -> None:
-        self.calls: list[dict[str, object]] = []
-        self._response = response
-        self._error = error
-
-    async def create(self, **kwargs: object) -> object:
-        self.calls.append(kwargs)
-        if self._error is not None:
-            raise self._error
-        return self._response
-
-
-class FakeOpenAISdkClient:
-    def __init__(self, endpoint: FakeTranscriptionsEndpoint) -> None:
-        self.audio = SimpleNamespace(transcriptions=endpoint)
-
-
-class FakeChunkTranscriber:
-    def __init__(
-        self,
-        *,
-        responses: list[TranscriptionResult] | None = None,
-        error: Exception | None = None,
-    ) -> None:
-        self.calls: list[tuple[Path, str | None]] = []
-        self._responses = list(responses or [])
-        self._error = error
-
-    async def transcribe_file(
-        self,
-        path: Path,
-        *,
-        prompt_suffix: str | None = None,
-    ) -> TranscriptionResult:
-        self.calls.append((path, prompt_suffix))
-        if self._error is not None:
-            raise self._error
-        return self._responses.pop(0)
-
-
-class FakeLoggedOpenAIError(OpenAIError):
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        self.status_code = 400
-        self.body = {
-            "error": {
-                "message": "audio duration exceeds limit",
-                "code": "invalid_value",
-            }
-        }
+from tests.fakes import (
+    FakeChunkTranscriber,
+    FakeLoggedOpenAIError,
+    FakeOpenAISdkClient,
+    FakeTranscriptionsEndpoint,
+)
 
 
 @pytest.mark.asyncio
@@ -116,6 +72,7 @@ async def test_public_transcribe_audio_loads_config_and_delegates(
         "keywords": config.keywords,
         "diarization_enabled": config.diarization_enabled,
         "diarization_model": config.diarization_model,
+        "subtitle_model": config.subtitle_model,
         "known_speaker_names": config.known_speaker_names,
         "known_speaker_references": config.known_speaker_references,
         "timestamps_enabled": False,
@@ -127,9 +84,14 @@ async def test_public_transcribe_audio_uses_whisper_timestamps_for_srt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """SRT -> клиент получает модель субтитров из конфига и включённые таймкоды."""
     input_path = tmp_path / "meeting.wav"
     output_dir = tmp_path / "out"
-    config = TranscriptionConfig(openai_api_key="test-key", model="gpt-transcribe")
+    config = TranscriptionConfig(
+        openai_api_key="test-key",
+        model="gpt-transcribe",
+        subtitle_model=OPENROUTER_SUBTITLE_MODEL,
+    )
     captured: dict[str, object] = {}
 
     class FakeClient:
@@ -162,7 +124,8 @@ async def test_public_transcribe_audio_uses_whisper_timestamps_for_srt(
     assert captured["output_format"] == "srt"
     client_kwargs = captured["client_kwargs"]
     assert isinstance(client_kwargs, dict)
-    assert client_kwargs["model"] == "whisper-1"
+    # Модель субтитров берётся из конфига отдельным аргументом.
+    assert client_kwargs["subtitle_model"] == OPENROUTER_SUBTITLE_MODEL
     assert client_kwargs["timestamps_enabled"] is True
     assert client_kwargs["diarization_enabled"] is False
 
@@ -200,6 +163,31 @@ async def test_openai_transcription_client_returns_response_text(tmp_path: Path)
     assert endpoint.calls[0]["chunking_strategy"] == "auto"
     assert endpoint.calls[0]["extra_body"]["languages"] == ["ru", "en"]
     assert "keywords" in endpoint.calls[0]["extra_body"]
+
+
+@pytest.mark.asyncio
+async def test_openai_transcription_client_sends_hints_for_provider_prefixed_model(
+    tmp_path: Path,
+) -> None:
+    """openai/gpt-transcribe (OpenRouter) -> languages и keywords идут через extra_body."""
+    chunk_path = tmp_path / "chunk.mp3"
+    chunk_path.write_bytes(b"audio")
+    endpoint = FakeTranscriptionsEndpoint(response=SimpleNamespace(text="hello world"))
+    client = OpenAITranscriptionClient(
+        api_key="test-key",
+        model=OPENROUTER_TRANSCRIPTION_MODEL,
+        languages=("ru", "en"),
+        keywords=("scheduler",),
+        client=FakeOpenAISdkClient(endpoint),
+    )
+
+    await client.transcribe_file(chunk_path)
+
+    call = endpoint.calls[0]
+    # Модель уходит с префиксом провайдера, подсказки не теряются на legacy-ветке.
+    assert call["model"] == OPENROUTER_TRANSCRIPTION_MODEL
+    assert call["extra_body"] == {"languages": ["ru", "en"], "keywords": ["scheduler"]}
+    assert "language" not in call
 
 
 @pytest.mark.asyncio
@@ -284,6 +272,7 @@ async def test_openai_transcription_client_maps_diarized_segments(tmp_path: Path
 async def test_openai_transcription_client_requests_segment_timestamps(
     tmp_path: Path,
 ) -> None:
+    """Таймкоды -> verbose_json на модели субтитров без промпта и подсказок."""
     chunk_path = tmp_path / "chunk.mp3"
     chunk_path.write_bytes(b"audio")
     endpoint = FakeTranscriptionsEndpoint(
@@ -297,6 +286,7 @@ async def test_openai_transcription_client_requests_segment_timestamps(
     )
     client = OpenAITranscriptionClient(
         api_key="test-key",
+        subtitle_model=OPENROUTER_SUBTITLE_MODEL,
         languages=("ru", "en"),
         keywords=("scheduler",),
         prompt="Main context",
@@ -307,7 +297,8 @@ async def test_openai_transcription_client_requests_segment_timestamps(
     result = await client.transcribe_file(chunk_path, prompt_suffix="хвост")
 
     call = endpoint.calls[0]
-    assert call["model"] == "whisper-1"
+    # Запрос уходит на модель субтитров, а не на основную модель транскрибации.
+    assert call["model"] == OPENROUTER_SUBTITLE_MODEL
     assert call["response_format"] == "verbose_json"
     assert call["timestamp_granularities"] == ["segment"]
     assert "chunking_strategy" not in call
@@ -320,6 +311,26 @@ async def test_openai_transcription_client_requests_segment_timestamps(
         TranscriptionSegment(start_seconds=0.0, end_seconds=1.25, speaker="", text="привет"),
         TranscriptionSegment(start_seconds=1.25, end_seconds=2.5, speaker="", text="hello"),
     )
+
+
+@pytest.mark.asyncio
+async def test_openai_transcription_client_defaults_timestamps_to_whisper(tmp_path: Path) -> None:
+    """Таймкоды без явных моделей -> запрос на whisper-1, а не на gpt-transcribe."""
+    chunk_path = tmp_path / "chunk.mp3"
+    chunk_path.write_bytes(b"audio")
+    endpoint = FakeTranscriptionsEndpoint(
+        response={"text": "hello", "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}]}
+    )
+    client = OpenAITranscriptionClient(
+        api_key="test-key",
+        timestamps_enabled=True,
+        client=FakeOpenAISdkClient(endpoint),
+    )
+
+    await client.transcribe_file(chunk_path)
+
+    # Клиент сам гарантирует whisper-модель для SRT.
+    assert endpoint.calls[0]["model"] == DEFAULT_SUBTITLE_MODEL
 
 
 @pytest.mark.asyncio

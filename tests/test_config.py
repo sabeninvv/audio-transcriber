@@ -5,6 +5,7 @@ from audio_transcriber.config import (
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_CHUNK_CONTEXT_CHARS,
     DEFAULT_DIARIZATION_ENABLED,
+    DEFAULT_SUBTITLE_MODEL,
     DEFAULT_TRANSCRIPTION_LANGUAGES,
     DEFAULT_TRANSCRIPTION_MODEL,
     DEFAULT_TRANSCRIPTION_PROMPT,
@@ -21,11 +22,14 @@ def test_load_config_reads_openai_api_key_from_env(monkeypatch: pytest.MonkeyPat
 
 
 def test_load_config_uses_safe_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Пустое окружение кроме ключа -> все значения по умолчанию."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     config = load_config()
 
     assert config.model == DEFAULT_TRANSCRIPTION_MODEL
+    # SRT по умолчанию идёт на whisper-1 OpenAI.
+    assert config.subtitle_model == DEFAULT_SUBTITLE_MODEL == "whisper-1"
     assert config.languages == DEFAULT_TRANSCRIPTION_LANGUAGES
     assert config.prompt == DEFAULT_TRANSCRIPTION_PROMPT
     assert config.chunk_context_chars == DEFAULT_CHUNK_CONTEXT_CHARS
@@ -33,6 +37,36 @@ def test_load_config_uses_safe_defaults(monkeypatch: pytest.MonkeyPatch) -> None
     assert config.diarization_enabled is DEFAULT_DIARIZATION_ENABLED
     assert config.chunk_max_bytes == DEFAULT_CHUNK_MAX_BYTES
     assert config.chunk_max_bytes < 25 * 1024 * 1024
+
+
+def test_load_config_reads_provider_prefixed_models() -> None:
+    """Модели OpenRouter в ENV -> попадают в конфиг без изменений."""
+    transcription_model = "openai/gpt-transcribe"
+    subtitle_model = "openai/whisper-1"
+
+    config = load_config(
+        {
+            "OPENAI_API_KEY": "test-key",
+            "TRANSCRIPTION_MODEL": transcription_model,
+            "TRANSCRIPTION_SUBTITLE_MODEL": f" {subtitle_model} ",
+        }
+    )
+
+    assert config.model == transcription_model
+    # Пробелы вокруг значения обрезаются, как у остальных моделей.
+    assert config.subtitle_model == subtitle_model
+
+
+@pytest.mark.parametrize("subtitle_model", ["", "  ", "gpt-transcribe", "openai/gpt-4o-transcribe"])
+def test_load_config_rejects_non_whisper_subtitle_model(subtitle_model: str) -> None:
+    """Пустая или не-whisper модель субтитров -> ошибка при загрузке конфига."""
+    with pytest.raises(TranscriptionError, match="TRANSCRIPTION_SUBTITLE_MODEL"):
+        load_config(
+            {
+                "OPENAI_API_KEY": "test-key",
+                "TRANSCRIPTION_SUBTITLE_MODEL": subtitle_model,
+            }
+        )
 
 
 def test_load_config_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
