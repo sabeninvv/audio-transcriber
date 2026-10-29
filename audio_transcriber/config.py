@@ -119,6 +119,16 @@ def load_config(env: Mapping[str, str] | None = None) -> TranscriptionConfig:
         var_name="TRANSCRIPTION_CHUNK_CONTEXT_CHARS",
         default=DEFAULT_CHUNK_CONTEXT_CHARS,
     )
+    chunk_max_bytes = _parse_positive_int(
+        source.get("TRANSCRIPTION_CHUNK_MAX_BYTES"),
+        var_name="TRANSCRIPTION_CHUNK_MAX_BYTES",
+        default=DEFAULT_CHUNK_MAX_BYTES,
+    )
+    chunk_max_duration_seconds = _parse_positive_int(
+        source.get("TRANSCRIPTION_CHUNK_MAX_DURATION_SECONDS"),
+        var_name="TRANSCRIPTION_CHUNK_MAX_DURATION_SECONDS",
+        default=DEFAULT_CHUNK_MAX_DURATION_SECONDS,
+    )
     diarization_enabled = _parse_bool(
         source.get(
             "TRANSCRIPTION_DIARIZATION_ENABLED",
@@ -168,6 +178,8 @@ def load_config(env: Mapping[str, str] | None = None) -> TranscriptionConfig:
         subtitle_model=subtitle_model,
         known_speaker_names=known_speaker_names,
         known_speaker_references=known_speaker_references,
+        chunk_max_bytes=chunk_max_bytes,
+        chunk_max_duration_seconds=chunk_max_duration_seconds,
     )
 
 

@@ -7,7 +7,7 @@ Async Python module for transcribing local media files with the OpenAI Audio API
 - Python `3.14` (pinned in `.python-version`)
 - [`uv`](https://docs.astral.sh/uv/)
 - `ffmpeg` and `ffprobe` available on `PATH`
-- `OPENAI_API_KEY` (an OpenAI or OpenRouter key) `API_ELEVENLABS_API_KEY`, or `GEMINI_API_KEY` in the environment
+- `OPENAI_API_KEY` (an OpenAI or OpenRouter key), `API_ELEVENLABS_API_KEY`, or `GEMINI_API_KEY` in the environment
 
 ## Install Dependencies
 
@@ -88,6 +88,13 @@ Optional quality controls:
 - `TRANSCRIPTION_KEYWORDS` (comma-separated glossary)
 - `TRANSCRIPTION_CHUNK_CONTEXT_CHARS` (default: `220`)
 
+Chunking limits (media longer or larger than a limit is split into `mp3` chunks):
+
+- `TRANSCRIPTION_CHUNK_MAX_BYTES` (default: `25165824`, 24 MB). OpenAI rejects uploads over 25 MB.
+- `TRANSCRIPTION_CHUNK_MAX_DURATION_SECONDS` (default: `1300`)
+
+Raise both limits for ElevenLabs (up to 5 GB per file) to send a recording in fewer requests, so phrases split at chunk boundaries less often and `speaker_N` labels stay consistent. For Gemini keep a chunk under the inline request limit after base64 (a third larger than the file). SRT output on OpenAI still uses 30-second chunks.
+
 Diarization controls:
 
 - `TRANSCRIPTION_DIARIZATION_ENABLED` (`true`/`false`, default: `false`)
@@ -156,7 +163,7 @@ Differences from OpenAI:
 - A response cut by `MAX_TOKENS` or blocked by safety filters fails the file instead of writing a partial transcript.
 - SRT output and `TRANSCRIPTION_DIARIZATION_ENABLED=true` fail at startup: Gemini returns no segment timestamps or speaker labels.
 - `TRANSCRIPTION_SUBTITLE_MODEL`, `TRANSCRIPTION_DIARIZATION_MODEL`, `TRANSCRIPTION_KNOWN_SPEAKER_NAMES` and `TRANSCRIPTION_KNOWN_SPEAKER_REFERENCES` are OpenAI-only; setting any of them with Gemini fails at startup.
-- Inline requests are limited to 20 MB; the default 1300-second chunk is about 14 MB after base64.
+- Inline requests are limited to 20 MB; the default 1300-second chunk is about 14 MB after base64. Google announced a 100 MB inline limit in January 2026; check it before raising `TRANSCRIPTION_CHUNK_MAX_DURATION_SECONDS`.
 
 ## Telegram Bot Usage
 

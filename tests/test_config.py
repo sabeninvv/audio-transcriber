@@ -3,6 +3,7 @@ import pytest
 from audio_transcriber.exceptions import TranscriptionError
 from audio_transcriber.config import (
     DEFAULT_CHUNK_MAX_BYTES,
+    DEFAULT_CHUNK_MAX_DURATION_SECONDS,
     DEFAULT_CHUNK_CONTEXT_CHARS,
     DEFAULT_DIARIZATION_ENABLED,
     DEFAULT_ELEVENLABS_MODEL,
@@ -148,8 +149,39 @@ def test_load_config_uses_safe_defaults(monkeypatch: pytest.MonkeyPatch) -> None
     assert config.chunk_context_chars == DEFAULT_CHUNK_CONTEXT_CHARS
     assert config.keywords
     assert config.diarization_enabled is DEFAULT_DIARIZATION_ENABLED
-    assert config.chunk_max_bytes == DEFAULT_CHUNK_MAX_BYTES
+    # Без ENV лимиты нарезки остаются прежними: 24 МБ и 1300 с.
+    assert config.chunk_max_bytes == DEFAULT_CHUNK_MAX_BYTES == 24 * 1024 * 1024
+    assert config.chunk_max_duration_seconds == DEFAULT_CHUNK_MAX_DURATION_SECONDS == 1_300
     assert config.chunk_max_bytes < 25 * 1024 * 1024
+
+
+def test_load_config_reads_chunk_limits_from_env() -> None:
+    """Лимиты нарезки в ENV -> попадают в конфиг вместо значений по умолчанию."""
+    chunk_max_bytes = 100 * 1024 * 1024
+    chunk_max_duration_seconds = 7_200
+
+    config = load_config(
+        {
+            "TRANSCRIPTION_PROVIDER": "elevenlabs",
+            ELEVENLABS_KEY_ENV: ELEVENLABS_KEY,
+            "TRANSCRIPTION_CHUNK_MAX_BYTES": str(chunk_max_bytes),
+            "TRANSCRIPTION_CHUNK_MAX_DURATION_SECONDS": str(chunk_max_duration_seconds),
+        }
+    )
+
+    assert config.chunk_max_bytes == chunk_max_bytes
+    assert config.chunk_max_duration_seconds == chunk_max_duration_seconds
+
+
+@pytest.mark.parametrize(
+    "env_name",
+    ["TRANSCRIPTION_CHUNK_MAX_BYTES", "TRANSCRIPTION_CHUNK_MAX_DURATION_SECONDS"],
+)
+@pytest.mark.parametrize("raw_value", ["0", "-1", "10MB"])
+def test_load_config_rejects_invalid_chunk_limit(env_name: str, raw_value: str) -> None:
+    """Ноль, отрицательное или нечисловое значение лимита -> ошибка с именем переменной."""
+    with pytest.raises(TranscriptionError, match=env_name):
+        load_config({"OPENAI_API_KEY": "test-key", env_name: raw_value})
 
 
 def test_load_config_reads_provider_prefixed_models() -> None:
