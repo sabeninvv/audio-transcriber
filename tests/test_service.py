@@ -14,6 +14,7 @@ from audio_transcriber.config import (
     TranscriptionProvider,
 )
 from audio_transcriber.elevenlabs_client import ElevenLabsTranscriptionClient
+from audio_transcriber.gemini_client import GeminiTranscriptionClient
 
 OPENROUTER_TRANSCRIPTION_MODEL = "openai/gpt-transcribe"
 OPENROUTER_SUBTITLE_MODEL = "openai/whisper-1"
@@ -154,6 +155,39 @@ async def test_public_transcribe_audio_builds_elevenlabs_client_for_provider(
 
     assert len(fake_service.clients) == 1
     assert isinstance(fake_service.clients[0], ElevenLabsTranscriptionClient)
+
+
+@pytest.mark.asyncio
+async def test_public_transcribe_audio_builds_gemini_client_for_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Провайдер gemini -> сервис получает клиента Gemini."""
+    config = TranscriptionConfig(api_key="test-key", provider=TranscriptionProvider.GEMINI)
+    fake_service = FakeTranscriptionService()
+    monkeypatch.setattr(service_module, "load_config", lambda: config)
+    monkeypatch.setattr(service_module, "TranscriptionService", fake_service)
+
+    await service_module.transcribe_audio("meeting.wav", "out")
+
+    assert len(fake_service.clients) == 1
+    assert isinstance(fake_service.clients[0], GeminiTranscriptionClient)
+
+
+@pytest.mark.asyncio
+async def test_public_transcribe_audio_rejects_srt_for_gemini(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gemini + SRT -> ошибка до сервиса: сегментных таймкодов у Gemini нет."""
+    config = TranscriptionConfig(api_key="test-key", provider=TranscriptionProvider.GEMINI)
+    fake_service = FakeTranscriptionService()
+    monkeypatch.setattr(service_module, "load_config", lambda: config)
+    monkeypatch.setattr(service_module, "TranscriptionService", fake_service)
+
+    with pytest.raises(TranscriptionError, match="gemini"):
+        await service_module.transcribe_audio("meeting.wav", "out", output_format="srt")
+
+    # Медиа не обрабатывалось: сервис не создан.
+    assert fake_service.clients == []
 
 
 @pytest.mark.asyncio

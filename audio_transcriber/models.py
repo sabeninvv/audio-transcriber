@@ -43,3 +43,19 @@ class TranscriptionSegment:
 class TranscriptionResult:
     text: str
     segments: tuple[TranscriptionSegment, ...] = ()
+
+
+def build_prompt(base_prompt: str, prompt_suffix: str | None) -> str:
+    """Склеивает промпт с хвостом предыдущего чанка; общая для клиентов с промптом."""
+    prefix = base_prompt.strip()
+    suffix = (prompt_suffix or "").strip()
+    if not suffix:
+        return prefix
+    if not prefix:
+        return f"Previous chunk context:\n{suffix}"
+    return (
+        f"{prefix}\n\n"
+        "Use this trailing context from the previous chunk for continuity. "
+        "Do not repeat it verbatim:\n"
+        f"{suffix}"
+    )

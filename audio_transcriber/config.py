@@ -8,6 +8,7 @@ from audio_transcriber.exceptions import TranscriptionError
 
 DEFAULT_TRANSCRIPTION_MODEL = "gpt-transcribe"
 DEFAULT_ELEVENLABS_MODEL = "scribe_v2"
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 DEFAULT_DIARIZATION_MODEL = "gpt-4o-transcribe-diarize"
 DEFAULT_SUBTITLE_MODEL = "whisper-1"
 # Префикс моделей OpenAI в каталоге OpenRouter.
@@ -37,23 +38,35 @@ FORBIDDEN_KEYWORD_CHARS = ("<", ">", "\n", "\r")
 class TranscriptionProvider(StrEnum):
     OPENAI = "openai"
     ELEVENLABS = "elevenlabs"
+    GEMINI = "gemini"
 
 
 # Переменная окружения с ключом для каждого провайдера.
 API_KEY_ENV_NAMES = {
     TranscriptionProvider.OPENAI: "OPENAI_API_KEY",
     TranscriptionProvider.ELEVENLABS: "API_ELEVENLABS_API_KEY",
+    TranscriptionProvider.GEMINI: "GEMINI_API_KEY",
 }
 
+DEFAULT_MODELS = {
+    TranscriptionProvider.OPENAI: DEFAULT_TRANSCRIPTION_MODEL,
+    TranscriptionProvider.ELEVENLABS: DEFAULT_ELEVENLABS_MODEL,
+    TranscriptionProvider.GEMINI: DEFAULT_GEMINI_MODEL,
+}
 
-# Настройки, которые есть только у OpenAI: для ElevenLabs явное значение — ошибка.
-OPENAI_ONLY_ENV_NAMES = (
-    "TRANSCRIPTION_PROMPT",
+# Настройки OpenAI Audio API без аналога у других провайдеров.
+_OPENAI_AUDIO_ENV_NAMES = (
     "TRANSCRIPTION_SUBTITLE_MODEL",
     "TRANSCRIPTION_DIARIZATION_MODEL",
     "TRANSCRIPTION_KNOWN_SPEAKER_NAMES",
     "TRANSCRIPTION_KNOWN_SPEAKER_REFERENCES",
 )
+# Явное значение такой настройки для провайдера — ошибка.
+UNSUPPORTED_ENV_NAMES = {
+    TranscriptionProvider.OPENAI: (),
+    TranscriptionProvider.ELEVENLABS: ("TRANSCRIPTION_PROMPT", *_OPENAI_AUDIO_ENV_NAMES),
+    TranscriptionProvider.GEMINI: _OPENAI_AUDIO_ENV_NAMES,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,17 +95,11 @@ def load_config(env: Mapping[str, str] | None = None) -> TranscriptionConfig:
     api_key = source.get(api_key_env_name)
     if not api_key:
         raise TranscriptionError(f"{api_key_env_name} environment variable is required.")
-    if provider is TranscriptionProvider.ELEVENLABS:
-        unsupported = [name for name in OPENAI_ONLY_ENV_NAMES if name in source]
-        if unsupported:
-            raise TranscriptionError(f"ElevenLabs does not support: {', '.join(unsupported)}.")
+    unsupported = [name for name in UNSUPPORTED_ENV_NAMES[provider] if name in source]
+    if unsupported:
+        raise TranscriptionError(f"{provider} does not support: {', '.join(unsupported)}.")
 
-    default_model = (
-        DEFAULT_ELEVENLABS_MODEL
-        if provider is TranscriptionProvider.ELEVENLABS
-        else DEFAULT_TRANSCRIPTION_MODEL
-    )
-    model = source.get("TRANSCRIPTION_MODEL", default_model).strip()
+    model = source.get("TRANSCRIPTION_MODEL", DEFAULT_MODELS[provider]).strip()
     prompt = source.get("TRANSCRIPTION_PROMPT", DEFAULT_TRANSCRIPTION_PROMPT).strip()
     languages = _parse_csv_values(
         source.get("TRANSCRIPTION_LANGUAGES"),
@@ -101,7 +108,9 @@ def load_config(env: Mapping[str, str] | None = None) -> TranscriptionConfig:
     # keyterms у ElevenLabs дороже запрос на 20%, поэтому шлём только явно заданные.
     keywords = _parse_csv_values(
         source.get("TRANSCRIPTION_KEYWORDS"),
-        default=DEFAULT_TRANSCRIPTION_KEYWORDS if provider is TranscriptionProvider.OPENAI else (),
+        default=(
+            () if provider is TranscriptionProvider.ELEVENLABS else DEFAULT_TRANSCRIPTION_KEYWORDS
+        ),
     )
     _validate_keywords(keywords)
 
@@ -116,6 +125,8 @@ def load_config(env: Mapping[str, str] | None = None) -> TranscriptionConfig:
             "true" if DEFAULT_DIARIZATION_ENABLED else "false",
         )
     )
+    if diarization_enabled and provider is TranscriptionProvider.GEMINI:
+        raise TranscriptionError("gemini does not support TRANSCRIPTION_DIARIZATION_ENABLED=true.")
     diarization_model = source.get("TRANSCRIPTION_DIARIZATION_MODEL", DEFAULT_DIARIZATION_MODEL).strip()
     subtitle_model = source.get("TRANSCRIPTION_SUBTITLE_MODEL", DEFAULT_SUBTITLE_MODEL).strip()
     if (

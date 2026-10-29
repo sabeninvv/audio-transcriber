@@ -26,6 +26,7 @@ from audio_transcriber.exceptions import (
     AudioChunkingError,
     TranscriptionError,
 )
+from audio_transcriber.gemini_client import GeminiTranscriptionClient
 from audio_transcriber.models import (
     OutputFormat,
     TranscriptionResult,
@@ -287,6 +288,17 @@ async def transcribe_audio(
                 keywords=config.keywords,
                 diarization_enabled=config.diarization_enabled,
                 timestamps_enabled=timestamps_enabled,
+            )
+        case TranscriptionProvider.GEMINI:
+            if timestamps_enabled:
+                # Сегментных таймкодов Gemini не отдаёт.
+                raise TranscriptionError("SRT subtitles are not supported by gemini.")
+            client = GeminiTranscriptionClient(
+                api_key=config.api_key,
+                model=config.model,
+                prompt=config.prompt,
+                languages=config.languages,
+                keywords=config.keywords,
             )
     service = TranscriptionService(client)
     return await service.transcribe_audio(

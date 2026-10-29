@@ -1,13 +1,13 @@
 # audio-transcriber
 
-Async Python module for transcribing local media files with the OpenAI Audio API or ElevenLabs Speech-to-Text.
+Async Python module for transcribing local media files with the OpenAI Audio API, ElevenLabs Speech-to-Text, or Gemini.
 
 ## Requirements
 
 - Python `3.14` (pinned in `.python-version`)
 - [`uv`](https://docs.astral.sh/uv/)
 - `ffmpeg` and `ffprobe` available on `PATH`
-- `OPENAI_API_KEY` (an OpenAI or OpenRouter key) or `API_ELEVENLABS_API_KEY` in the environment
+- `OPENAI_API_KEY` (an OpenAI or OpenRouter key) `API_ELEVENLABS_API_KEY`, or `GEMINI_API_KEY` in the environment
 
 ## Install Dependencies
 
@@ -76,11 +76,12 @@ Required:
 
 - `OPENAI_API_KEY` for `TRANSCRIPTION_PROVIDER=openai` (default)
 - `API_ELEVENLABS_API_KEY` for `TRANSCRIPTION_PROVIDER=elevenlabs`
+- `GEMINI_API_KEY` for `TRANSCRIPTION_PROVIDER=gemini`
 
 Optional quality controls:
 
-- `TRANSCRIPTION_PROVIDER` (`openai` or `elevenlabs`, default: `openai`)
-- `TRANSCRIPTION_MODEL` (default: `gpt-transcribe`, `scribe_v2` for ElevenLabs)
+- `TRANSCRIPTION_PROVIDER` (`openai`, `elevenlabs`, or `gemini`, default: `openai`)
+- `TRANSCRIPTION_MODEL` (default: `gpt-transcribe`, `scribe_v2` for ElevenLabs, `gemini-3.8-flash` for Gemini)
 - `TRANSCRIPTION_SUBTITLE_MODEL` (default: `whisper-1`, used for SRT output; only `whisper-1` or `openai/whisper-1`)
 - `TRANSCRIPTION_PROMPT`
 - `TRANSCRIPTION_LANGUAGES` (comma-separated, default: `ru,en`)
@@ -138,6 +139,24 @@ Differences from OpenAI:
 - Scribe has no prompt, so previous-chunk context is not sent.
 - `TRANSCRIPTION_PROMPT`, `TRANSCRIPTION_SUBTITLE_MODEL`, `TRANSCRIPTION_DIARIZATION_MODEL`, `TRANSCRIPTION_KNOWN_SPEAKER_NAMES` and `TRANSCRIPTION_KNOWN_SPEAKER_REFERENCES` are OpenAI-only; setting any of them with ElevenLabs fails at startup.
 - SRT cues are built from word timestamps without 30-second windows.
+
+## Gemini
+
+```bash
+TRANSCRIPTION_PROVIDER=gemini
+GEMINI_API_KEY=<gemini key>
+```
+
+The module sends each chunk inline as `audio/mp3` to `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` with a "transcribe verbatim" instruction. Only Markdown output without speaker labels is supported.
+
+Differences from OpenAI:
+
+- `TRANSCRIPTION_PROMPT`, `TRANSCRIPTION_LANGUAGES`, `TRANSCRIPTION_KEYWORDS` and previous-chunk context go into the instruction text.
+- Thinking is set to `low`. `thinkingLevel` works on Gemini 3 models; other models may reject the request.
+- A response cut by `MAX_TOKENS` or blocked by safety filters fails the file instead of writing a partial transcript.
+- SRT output and `TRANSCRIPTION_DIARIZATION_ENABLED=true` fail at startup: Gemini returns no segment timestamps or speaker labels.
+- `TRANSCRIPTION_SUBTITLE_MODEL`, `TRANSCRIPTION_DIARIZATION_MODEL`, `TRANSCRIPTION_KNOWN_SPEAKER_NAMES` and `TRANSCRIPTION_KNOWN_SPEAKER_REFERENCES` are OpenAI-only; setting any of them with Gemini fails at startup.
+- Inline requests are limited to 20 MB; the default 1300-second chunk is about 14 MB after base64.
 
 ## Telegram Bot Usage
 

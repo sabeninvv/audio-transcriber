@@ -20,3 +20,7 @@ class OpenAITranscriptionError(TranscriptionError):
 
 class ElevenLabsTranscriptionError(TranscriptionError):
     """Raised when the ElevenLabs transcription request fails."""
+
+
+class GeminiTranscriptionError(TranscriptionError):
+    """Raised when the Gemini transcription request fails."""

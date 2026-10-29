@@ -62,7 +62,7 @@ class FakeLoggedOpenAIError(OpenAIError):
         }
 
 
-class FakeElevenLabsApi:
+class FakeHttpApi:
     """Обработчик httpx.MockTransport: запоминает запросы и отдаёт заданный ответ или ошибку."""
 
     def __init__(

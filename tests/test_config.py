@@ -6,17 +6,23 @@ from audio_transcriber.config import (
     DEFAULT_CHUNK_CONTEXT_CHARS,
     DEFAULT_DIARIZATION_ENABLED,
     DEFAULT_ELEVENLABS_MODEL,
+    DEFAULT_GEMINI_MODEL,
     DEFAULT_SUBTITLE_MODEL,
+    DEFAULT_TRANSCRIPTION_KEYWORDS,
     DEFAULT_TRANSCRIPTION_LANGUAGES,
     DEFAULT_TRANSCRIPTION_MODEL,
     DEFAULT_TRANSCRIPTION_PROMPT,
-    OPENAI_ONLY_ENV_NAMES,
+    API_KEY_ENV_NAMES,
     TranscriptionProvider,
+    UNSUPPORTED_ENV_NAMES,
     load_config,
 )
 
 ELEVENLABS_KEY_ENV = "API_ELEVENLABS_API_KEY"
 ELEVENLABS_KEY = "elevenlabs-key"
+GEMINI_KEY_ENV = "GEMINI_API_KEY"
+GEMINI_KEY = "gemini-key"
+CUSTOM_PROMPT = "Interview about podcasts."
 
 
 def test_load_config_reads_openai_api_key_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -62,19 +68,68 @@ def test_load_config_requires_elevenlabs_key_even_with_openai_key() -> None:
 
 def test_load_config_rejects_unknown_provider() -> None:
     """Неизвестный провайдер -> ошибка со списком допустимых значений."""
-    with pytest.raises(TranscriptionError, match="openai, elevenlabs"):
+    with pytest.raises(TranscriptionError, match="openai, elevenlabs, gemini"):
+        load_config({"TRANSCRIPTION_PROVIDER": "whisper", "OPENAI_API_KEY": "test-key"})
+
+
+@pytest.mark.parametrize(
+    ("provider", "env_name"),
+    [
+        (provider, env_name)
+        for provider, env_names in UNSUPPORTED_ENV_NAMES.items()
+        for env_name in env_names
+    ],
+)
+def test_load_config_rejects_unsupported_settings_for_provider(
+    provider: TranscriptionProvider,
+    env_name: str,
+) -> None:
+    """Явно заданная настройка, которой нет у провайдера -> ошибка вместо молчаливого игнора."""
+    with pytest.raises(TranscriptionError, match=f"{provider} does not support: {env_name}"):
+        load_config(
+            {
+                "TRANSCRIPTION_PROVIDER": provider,
+                API_KEY_ENV_NAMES[provider]: "provider-key",
+                env_name: "value",
+            }
+        )
+
+
+def test_load_config_reads_gemini_key_prompt_and_default_model() -> None:
+    """Провайдер gemini -> свой ключ, модель по умолчанию, промпт и дефолтный глоссарий."""
+    config = load_config(
+        {
+            "TRANSCRIPTION_PROVIDER": "gemini",
+            GEMINI_KEY_ENV: GEMINI_KEY,
+            "TRANSCRIPTION_PROMPT": CUSTOM_PROMPT,
+            # Общий env-файл с выключенной диаризацией не мешает Gemini.
+            "TRANSCRIPTION_DIARIZATION_ENABLED": "false",
+        }
+    )
+
+    assert config.provider is TranscriptionProvider.GEMINI
+    assert config.api_key == GEMINI_KEY
+    assert config.model == DEFAULT_GEMINI_MODEL == "gemini-3.8-flash"
+    # Gemini принимает промпт, в отличие от ElevenLabs.
+    assert config.prompt == CUSTOM_PROMPT
+    # Глоссарий уходит в текст промпта и цены не меняет.
+    assert config.keywords == DEFAULT_TRANSCRIPTION_KEYWORDS
+
+
+def test_load_config_requires_gemini_key_even_with_openai_key() -> None:
+    """Gemini без своего ключа -> ошибка, ключ OpenAI не подставляется."""
+    with pytest.raises(TranscriptionError, match=GEMINI_KEY_ENV):
         load_config({"TRANSCRIPTION_PROVIDER": "gemini", "OPENAI_API_KEY": "test-key"})
 
 
-@pytest.mark.parametrize("env_name", OPENAI_ONLY_ENV_NAMES)
-def test_load_config_rejects_openai_only_settings_for_elevenlabs(env_name: str) -> None:
-    """Явно заданная OpenAI-настройка у ElevenLabs -> ошибка вместо молчаливого игнора."""
-    with pytest.raises(TranscriptionError, match=env_name):
+def test_load_config_rejects_diarization_for_gemini() -> None:
+    """Gemini с включённой диаризацией -> ошибка при загрузке конфига."""
+    with pytest.raises(TranscriptionError, match="TRANSCRIPTION_DIARIZATION_ENABLED"):
         load_config(
             {
-                "TRANSCRIPTION_PROVIDER": "elevenlabs",
-                ELEVENLABS_KEY_ENV: ELEVENLABS_KEY,
-                env_name: "value",
+                "TRANSCRIPTION_PROVIDER": "gemini",
+                GEMINI_KEY_ENV: GEMINI_KEY,
+                "TRANSCRIPTION_DIARIZATION_ENABLED": "true",
             }
         )
 

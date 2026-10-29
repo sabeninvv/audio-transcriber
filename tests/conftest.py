@@ -42,3 +42,23 @@ def get_elevenlabs_response(text: str, words: list[dict[str, object]] | None = N
             "words": words or [],
         },
     )
+
+
+def get_gemini_response(text: str, *, finish_reason: str = "STOP") -> httpx.Response:
+    """Ответ Gemini generateContent с одним кандидатом, текст разбит на две части."""
+    middle = len(text) // 2
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": text[:middle]}, {"text": text[middle:]}],
+                    },
+                    "finishReason": finish_reason,
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1},
+        },
+    )

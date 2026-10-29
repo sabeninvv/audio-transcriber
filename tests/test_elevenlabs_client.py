@@ -8,7 +8,7 @@ from audio_transcriber.elevenlabs_client import ElevenLabsTranscriptionClient, _
 from audio_transcriber.exceptions import ElevenLabsTranscriptionError, TranscriptionError
 from audio_transcriber.models import TranscriptionSegment
 from tests.conftest import get_elevenlabs_response, get_elevenlabs_word
-from tests.fakes import FakeElevenLabsApi
+from tests.fakes import FakeHttpApi
 
 API_KEY = "test-key"
 TRANSCRIPT_TEXT = "Привет. Как дела?"
@@ -22,7 +22,7 @@ PREVIOUS_CHUNK_TAIL = "хвост прошлого чанка"
 @pytest.mark.asyncio
 async def test_transcribe_file_sends_scribe_form_and_returns_text_only(chunk_path: Path) -> None:
     """Обычный режим -> форма Scribe с ключом, языком и keyterms; в ответе только текст."""
-    api = FakeElevenLabsApi(
+    api = FakeHttpApi(
         response=get_elevenlabs_response(TRANSCRIPT_TEXT, [get_elevenlabs_word("Привет.", 0.0, 0.5)])
     )
     client = ElevenLabsTranscriptionClient(
@@ -53,7 +53,7 @@ async def test_transcribe_file_sends_scribe_form_and_returns_text_only(chunk_pat
 @pytest.mark.asyncio
 async def test_transcribe_file_leaves_language_auto_for_several_languages(chunk_path: Path) -> None:
     """Несколько языков и ключевые слова по умолчанию -> без language_code и keyterms."""
-    api = FakeElevenLabsApi(response=get_elevenlabs_response(TRANSCRIPT_TEXT))
+    api = FakeHttpApi(response=get_elevenlabs_response(TRANSCRIPT_TEXT))
     client = ElevenLabsTranscriptionClient(
         api_key=API_KEY,
         languages=(LANGUAGE, "en"),
@@ -71,7 +71,7 @@ async def test_transcribe_file_leaves_language_auto_for_several_languages(chunk_
 @pytest.mark.asyncio
 async def test_transcribe_file_groups_words_by_speaker_when_diarized(chunk_path: Path) -> None:
     """Диаризация -> diarize=true и реплики по спикерам без пробелов и звуковых событий."""
-    api = FakeElevenLabsApi(
+    api = FakeHttpApi(
         response=get_elevenlabs_response(
             TRANSCRIPT_TEXT,
             [
@@ -102,7 +102,7 @@ async def test_transcribe_file_groups_words_by_speaker_when_diarized(chunk_path:
 @pytest.mark.asyncio
 async def test_transcribe_file_returns_cues_for_subtitles(chunk_path: Path) -> None:
     """Таймкоды без диаризации -> реплики с пустым спикером."""
-    api = FakeElevenLabsApi(
+    api = FakeHttpApi(
         response=get_elevenlabs_response(
             TRANSCRIPT_TEXT,
             [
@@ -158,7 +158,7 @@ async def test_transcribe_file_rejects_failed_or_empty_response(
     response: httpx.Response,
 ) -> None:
     """Ошибка API, неожиданная форма или пустой текст -> ElevenLabsTranscriptionError."""
-    api = FakeElevenLabsApi(response=response)
+    api = FakeHttpApi(response=response)
     client = ElevenLabsTranscriptionClient(api_key=API_KEY, transport=api.transport())
 
     with pytest.raises(ElevenLabsTranscriptionError):
@@ -169,7 +169,7 @@ async def test_transcribe_file_rejects_failed_or_empty_response(
 async def test_transcribe_file_wraps_transport_errors(chunk_path: Path) -> None:
     """Сетевой сбой httpx -> ElevenLabsTranscriptionError с исходной причиной."""
     transport_error = httpx.ConnectError("connection refused")
-    api = FakeElevenLabsApi(error=transport_error)
+    api = FakeHttpApi(error=transport_error)
     client = ElevenLabsTranscriptionClient(api_key=API_KEY, transport=api.transport())
 
     with pytest.raises(ElevenLabsTranscriptionError) as error_info:

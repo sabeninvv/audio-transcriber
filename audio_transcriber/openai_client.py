@@ -15,7 +15,12 @@ from audio_transcriber.config import (
     OPENAI_MODEL_PREFIX,
 )
 from audio_transcriber.exceptions import OpenAITranscriptionError
-from audio_transcriber.models import TranscriptionResult, TranscriptionSegment, ensure_subtitles_allowed
+from audio_transcriber.models import (
+    TranscriptionResult,
+    TranscriptionSegment,
+    build_prompt,
+    ensure_subtitles_allowed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +116,7 @@ class OpenAITranscriptionClient:
             "chunking_strategy": "auto",
             "response_format": "json",
         }
-        prompt = _build_prompt(self._prompt, prompt_suffix)
+        prompt = build_prompt(self._prompt, prompt_suffix)
         if prompt:
             request_kwargs["prompt"] = prompt
 
@@ -279,18 +284,3 @@ def _coerce_response_value(container: Any, field: str) -> Any:
     if isinstance(container, dict):
         return container.get(field)
     return None
-
-
-def _build_prompt(base_prompt: str, prompt_suffix: str | None) -> str:
-    prefix = base_prompt.strip()
-    suffix = (prompt_suffix or "").strip()
-    if not suffix:
-        return prefix
-    if not prefix:
-        return f"Previous chunk context:\n{suffix}"
-    return (
-        f"{prefix}\n\n"
-        "Use this trailing context from the previous chunk for continuity. "
-        "Do not repeat it verbatim:\n"
-        f"{suffix}"
-    )
