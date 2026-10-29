@@ -8,11 +8,20 @@ from openai import OpenAIError
 
 import audio_transcriber.service as service_module
 from audio_transcriber.audio import AudioMetadata, calculate_chunk_duration_seconds
-from audio_transcriber.config import DEFAULT_SUBTITLE_MODEL, TranscriptionConfig
+from audio_transcriber.config import (
+    DEFAULT_SUBTITLE_MODEL,
+    TranscriptionConfig,
+    TranscriptionProvider,
+)
+from audio_transcriber.elevenlabs_client import ElevenLabsTranscriptionClient
 
 OPENROUTER_TRANSCRIPTION_MODEL = "openai/gpt-transcribe"
 OPENROUTER_SUBTITLE_MODEL = "openai/whisper-1"
-from audio_transcriber.exceptions import OpenAITranscriptionError, TranscriptionError
+from audio_transcriber.exceptions import (
+    ElevenLabsTranscriptionError,
+    OpenAITranscriptionError,
+    TranscriptionError,
+)
 from audio_transcriber.openai_client import (
     OpenAITranscriptionClient,
     TranscriptionResult,
@@ -23,6 +32,7 @@ from tests.fakes import (
     FakeChunkTranscriber,
     FakeLoggedOpenAIError,
     FakeOpenAISdkClient,
+    FakeTranscriptionService,
     FakeTranscriptionsEndpoint,
 )
 
@@ -34,7 +44,7 @@ async def test_public_transcribe_audio_loads_config_and_delegates(
 ) -> None:
     input_path = tmp_path / "meeting.wav"
     output_dir = tmp_path / "out"
-    config = TranscriptionConfig(openai_api_key="test-key", model="gpt-transcribe")
+    config = TranscriptionConfig(api_key="test-key", model="gpt-transcribe")
     captured: dict[str, object] = {}
 
     class FakeClient:
@@ -88,7 +98,7 @@ async def test_public_transcribe_audio_uses_whisper_timestamps_for_srt(
     input_path = tmp_path / "meeting.wav"
     output_dir = tmp_path / "out"
     config = TranscriptionConfig(
-        openai_api_key="test-key",
+        api_key="test-key",
         model="gpt-transcribe",
         subtitle_model=OPENROUTER_SUBTITLE_MODEL,
     )
@@ -131,10 +141,59 @@ async def test_public_transcribe_audio_uses_whisper_timestamps_for_srt(
 
 
 @pytest.mark.asyncio
+async def test_public_transcribe_audio_builds_elevenlabs_client_for_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Провайдер elevenlabs -> сервис получает клиента ElevenLabs."""
+    config = TranscriptionConfig(api_key="test-key", provider=TranscriptionProvider.ELEVENLABS)
+    fake_service = FakeTranscriptionService()
+    monkeypatch.setattr(service_module, "load_config", lambda: config)
+    monkeypatch.setattr(service_module, "TranscriptionService", fake_service)
+
+    await service_module.transcribe_audio("meeting.wav", "out")
+
+    assert len(fake_service.clients) == 1
+    assert isinstance(fake_service.clients[0], ElevenLabsTranscriptionClient)
+
+
+@pytest.mark.asyncio
+async def test_service_keeps_elevenlabs_error_from_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ошибка ElevenLabs из клиента -> пробрасывается как есть, без обёртки OpenAI."""
+    input_path = tmp_path / "meeting.wav"
+    input_path.write_bytes(b"source")
+    client_error = ElevenLabsTranscriptionError("ElevenLabs transcription request failed.")
+    config = TranscriptionConfig(api_key="test-key", provider=TranscriptionProvider.ELEVENLABS)
+
+    def fake_normalize(input_audio: str | Path, output_audio: str | Path, *, bitrate: str = "64k") -> Path:
+        del input_audio, bitrate
+        target = Path(output_audio)
+        target.write_bytes(b"normalized")
+        return target
+
+    monkeypatch.setattr(service_module, "validate_audio_path", lambda path: Path(path))
+    monkeypatch.setattr(service_module, "ensure_ffmpeg_available", lambda: None)
+    monkeypatch.setattr(service_module, "normalize_to_mp3", fake_normalize)
+    monkeypatch.setattr(
+        service_module,
+        "probe_audio_metadata",
+        lambda path: AudioMetadata(duration_seconds=10.0, bitrate_bps=64_000),
+    )
+
+    service = TranscriptionService(FakeChunkTranscriber(error=client_error))
+    with pytest.raises(ElevenLabsTranscriptionError) as error_info:
+        await service.transcribe_audio(input_path, tmp_path / "out", config=config)
+
+    assert error_info.value is client_error
+
+
+@pytest.mark.asyncio
 async def test_public_transcribe_audio_rejects_srt_with_diarization_before_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = TranscriptionConfig(openai_api_key="test-key", diarization_enabled=True)
+    config = TranscriptionConfig(api_key="test-key", diarization_enabled=True)
 
     def fail_client(**kwargs: object) -> object:
         del kwargs
@@ -566,7 +625,7 @@ async def test_service_transcribes_single_file_and_writes_markdown(
     input_path = tmp_path / "meeting.wav"
     input_path.write_bytes(b"source")
     output_dir = tmp_path / "out"
-    config = TranscriptionConfig(openai_api_key="test-key")
+    config = TranscriptionConfig(api_key="test-key")
     fake_client = FakeChunkTranscriber(responses=[TranscriptionResult(text="Single transcript")])
     generated_at = datetime(2026, 4, 7, 12, 30, 11, tzinfo=timezone.utc)
     probed_paths: list[Path] = []
@@ -619,7 +678,7 @@ async def test_service_names_output_file_using_source_stem_and_timestamp(
     input_path = tmp_path / "meeting.wav"
     input_path.write_bytes(b"source")
     output_dir = tmp_path / "out"
-    config = TranscriptionConfig(openai_api_key="test-key")
+    config = TranscriptionConfig(api_key="test-key")
     fake_client = FakeChunkTranscriber(responses=[TranscriptionResult(text="Single transcript")])
     generated_at = datetime(2026, 4, 7, 12, 30, 11, tzinfo=timezone.utc)
 
@@ -657,7 +716,7 @@ async def test_service_transcribes_multiple_chunks_in_order_and_passes_context(
     input_path = tmp_path / "meeting.wav"
     input_path.write_bytes(b"source")
     output_dir = tmp_path / "out"
-    config = TranscriptionConfig(openai_api_key="test-key", chunk_max_bytes=10)
+    config = TranscriptionConfig(api_key="test-key", chunk_max_bytes=10)
     fake_client = FakeChunkTranscriber(
         responses=[
             TranscriptionResult(text="First chunk"),
@@ -727,7 +786,7 @@ async def test_service_limits_chunk_context_before_passing_to_next_request(
     input_path.write_bytes(b"source")
     output_dir = tmp_path / "out"
     config = TranscriptionConfig(
-        openai_api_key="test-key",
+        api_key="test-key",
         chunk_max_bytes=10,
         chunk_context_chars=5,
     )
@@ -796,7 +855,7 @@ async def test_service_splits_when_duration_exceeds_limit_even_if_size_fits(
     input_path.write_bytes(b"source")
     output_dir = tmp_path / "out"
     config = TranscriptionConfig(
-        openai_api_key="test-key",
+        api_key="test-key",
         chunk_max_bytes=24 * 1024 * 1024,
         chunk_max_duration_seconds=1_300,
     )
@@ -857,7 +916,7 @@ async def test_service_re_splits_oversized_chunks_until_they_fit_limit(
     input_path = tmp_path / "meeting.wav"
     input_path.write_bytes(b"source")
     output_dir = tmp_path / "out"
-    config = TranscriptionConfig(openai_api_key="test-key", chunk_max_bytes=10)
+    config = TranscriptionConfig(api_key="test-key", chunk_max_bytes=10)
     fake_client = FakeChunkTranscriber(
         responses=[
             TranscriptionResult(text="First split"),
@@ -920,14 +979,15 @@ async def test_service_re_splits_oversized_chunks_until_they_fit_limit(
 
 
 @pytest.mark.asyncio
-async def test_service_maps_client_failures_to_openai_error(
+async def test_service_maps_client_failures_to_transcription_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Непредвиденный сбой клиента -> нейтральная TranscriptionError без привязки к провайдеру."""
     input_path = tmp_path / "meeting.wav"
     input_path.write_bytes(b"source")
     output_dir = tmp_path / "out"
-    config = TranscriptionConfig(openai_api_key="test-key")
+    config = TranscriptionConfig(api_key="test-key")
     fake_client = FakeChunkTranscriber(error=RuntimeError("boom"))
 
     monkeypatch.setattr(service_module, "validate_audio_path", lambda path: Path(path))
@@ -946,7 +1006,7 @@ async def test_service_maps_client_failures_to_openai_error(
     )
 
     service = TranscriptionService(fake_client)
-    with pytest.raises(OpenAITranscriptionError, match="OpenAI transcription request failed"):
+    with pytest.raises(TranscriptionError, match="Transcription request failed"):
         await service.transcribe_audio(input_path, output_dir, config=config)
 
 
@@ -958,7 +1018,7 @@ async def test_service_cleans_up_temporary_files_on_failure(
     input_path = tmp_path / "meeting.wav"
     input_path.write_bytes(b"source")
     output_dir = tmp_path / "out"
-    config = TranscriptionConfig(openai_api_key="test-key")
+    config = TranscriptionConfig(api_key="test-key")
     fake_client = FakeChunkTranscriber(error=RuntimeError("boom"))
     working_directory: dict[str, Path] = {}
 
@@ -979,7 +1039,7 @@ async def test_service_cleans_up_temporary_files_on_failure(
     )
 
     service = TranscriptionService(fake_client)
-    with pytest.raises(OpenAITranscriptionError):
+    with pytest.raises(TranscriptionError):
         await service.transcribe_audio(input_path, output_dir, config=config)
 
     assert "path" in working_directory
@@ -995,7 +1055,7 @@ async def test_service_offsets_diarized_segments_and_renders_speaker_block(
     input_path.write_bytes(b"source")
     output_dir = tmp_path / "out"
     config = TranscriptionConfig(
-        openai_api_key="test-key",
+        api_key="test-key",
         chunk_max_bytes=10,
         diarization_enabled=True,
     )
@@ -1069,7 +1129,7 @@ async def test_service_writes_srt_on_one_timeline_across_chunks(
     input_path = tmp_path / "meeting.wav"
     input_path.write_bytes(b"source")
     output_dir = tmp_path / "out"
-    config = TranscriptionConfig(openai_api_key="test-key", chunk_max_bytes=10)
+    config = TranscriptionConfig(api_key="test-key", chunk_max_bytes=10)
     fake_client = FakeChunkTranscriber(
         responses=[
             TranscriptionResult(
@@ -1147,7 +1207,7 @@ async def test_service_offsets_srt_after_resplitting_chunks(
     input_path = tmp_path / "meeting.wav"
     input_path.write_bytes(b"source")
     output_dir = tmp_path / "out"
-    config = TranscriptionConfig(openai_api_key="test-key", chunk_max_bytes=10)
+    config = TranscriptionConfig(api_key="test-key", chunk_max_bytes=10)
     fake_client = FakeChunkTranscriber(
         responses=[
             TranscriptionResult(text="a", segments=(TranscriptionSegment(0.2, 0.5, "", "a"),)),
@@ -1214,15 +1274,22 @@ async def test_service_offsets_srt_after_resplitting_chunks(
     assert "00:00:03,200 --> 00:00:03,500\nc\n" in content
 
 
+@pytest.mark.parametrize(
+    ("provider", "expected_split_durations"),
+    [(TranscriptionProvider.OPENAI, [30]), (TranscriptionProvider.ELEVENLABS, [])],
+)
 @pytest.mark.asyncio
 async def test_service_splits_subtitles_into_whisper_windows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    provider: TranscriptionProvider,
+    expected_split_durations: list[int],
 ) -> None:
+    """SRT -> 30-секундные окна только для whisper; ElevenLabs шлёт файл без нарезки."""
     input_path = tmp_path / "lesson.mp3"
     input_path.write_bytes(b"source")
     output_dir = tmp_path / "out"
-    config = TranscriptionConfig(openai_api_key="test-key")
+    config = TranscriptionConfig(api_key="test-key", provider=provider)
     fake_client = FakeChunkTranscriber(
         responses=[
             TranscriptionResult(text="one", segments=(TranscriptionSegment(0.0, 1.0, "", "one"),)),
@@ -1268,7 +1335,7 @@ async def test_service_splits_subtitles_into_whisper_windows(
     service = TranscriptionService(fake_client)
     await service.transcribe_audio(input_path, output_dir, config=config, output_format="srt")
 
-    assert split_durations == [30]
+    assert split_durations == expected_split_durations
 
 
 @pytest.mark.asyncio
@@ -1286,7 +1353,7 @@ async def test_service_rejects_srt_with_diarization_before_media_processing(
         await service.transcribe_audio(
             tmp_path / "missing.wav",
             tmp_path / "out",
-            config=TranscriptionConfig(openai_api_key="test-key", diarization_enabled=True),
+            config=TranscriptionConfig(api_key="test-key", diarization_enabled=True),
             output_format="srt",
         )
 
@@ -1306,6 +1373,6 @@ async def test_service_rejects_unknown_output_format_before_media_processing(
         await service.transcribe_audio(
             tmp_path / "missing.wav",
             tmp_path / "out",
-            config=TranscriptionConfig(openai_api_key="test-key"),
+            config=TranscriptionConfig(api_key="test-key"),
             output_format="vtt",
         )

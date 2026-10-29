@@ -16,3 +16,7 @@ class AudioChunkingError(TranscriptionError):
 
 class OpenAITranscriptionError(TranscriptionError):
     """Raised when the OpenAI transcription request fails."""
+
+
+class ElevenLabsTranscriptionError(TranscriptionError):
+    """Raised when the ElevenLabs transcription request fails."""

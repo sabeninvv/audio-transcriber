@@ -5,20 +5,78 @@ from audio_transcriber.config import (
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_CHUNK_CONTEXT_CHARS,
     DEFAULT_DIARIZATION_ENABLED,
+    DEFAULT_ELEVENLABS_MODEL,
     DEFAULT_SUBTITLE_MODEL,
     DEFAULT_TRANSCRIPTION_LANGUAGES,
     DEFAULT_TRANSCRIPTION_MODEL,
     DEFAULT_TRANSCRIPTION_PROMPT,
+    OPENAI_ONLY_ENV_NAMES,
+    TranscriptionProvider,
     load_config,
 )
 
+ELEVENLABS_KEY_ENV = "API_ELEVENLABS_API_KEY"
+ELEVENLABS_KEY = "elevenlabs-key"
+
 
 def test_load_config_reads_openai_api_key_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Провайдер не задан -> OpenAI с ключом из OPENAI_API_KEY."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("TRANSCRIPTION_PROVIDER", raising=False)
 
     config = load_config()
 
-    assert config.openai_api_key == "test-key"
+    assert config.api_key == "test-key"
+    assert config.provider is TranscriptionProvider.OPENAI
+
+
+def test_load_config_reads_elevenlabs_key_and_default_model() -> None:
+    """Провайдер elevenlabs -> ключ из своей переменной и модель scribe_v2 по умолчанию."""
+    config = load_config({"TRANSCRIPTION_PROVIDER": " ElevenLabs ", ELEVENLABS_KEY_ENV: ELEVENLABS_KEY})
+
+    assert config.provider is TranscriptionProvider.ELEVENLABS
+    assert config.api_key == ELEVENLABS_KEY
+    assert config.model == DEFAULT_ELEVENLABS_MODEL == "scribe_v2"
+    # Дефолтный глоссарий не уходит в платные keyterms.
+    assert config.keywords == ()
+
+
+def test_load_config_keeps_explicit_keywords_for_elevenlabs() -> None:
+    """Явный TRANSCRIPTION_KEYWORDS у ElevenLabs -> попадает в конфиг."""
+    config = load_config(
+        {
+            "TRANSCRIPTION_PROVIDER": "elevenlabs",
+            ELEVENLABS_KEY_ENV: ELEVENLABS_KEY,
+            "TRANSCRIPTION_KEYWORDS": "ReelsMaker, ContentLoader",
+        }
+    )
+
+    assert config.keywords == ("ReelsMaker", "ContentLoader")
+
+
+def test_load_config_requires_elevenlabs_key_even_with_openai_key() -> None:
+    """ElevenLabs без своего ключа -> ошибка, ключ OpenAI не подставляется."""
+    with pytest.raises(TranscriptionError, match=ELEVENLABS_KEY_ENV):
+        load_config({"TRANSCRIPTION_PROVIDER": "elevenlabs", "OPENAI_API_KEY": "test-key"})
+
+
+def test_load_config_rejects_unknown_provider() -> None:
+    """Неизвестный провайдер -> ошибка со списком допустимых значений."""
+    with pytest.raises(TranscriptionError, match="openai, elevenlabs"):
+        load_config({"TRANSCRIPTION_PROVIDER": "gemini", "OPENAI_API_KEY": "test-key"})
+
+
+@pytest.mark.parametrize("env_name", OPENAI_ONLY_ENV_NAMES)
+def test_load_config_rejects_openai_only_settings_for_elevenlabs(env_name: str) -> None:
+    """Явно заданная OpenAI-настройка у ElevenLabs -> ошибка вместо молчаливого игнора."""
+    with pytest.raises(TranscriptionError, match=env_name):
+        load_config(
+            {
+                "TRANSCRIPTION_PROVIDER": "elevenlabs",
+                ELEVENLABS_KEY_ENV: ELEVENLABS_KEY,
+                env_name: "value",
+            }
+        )
 
 
 def test_load_config_uses_safe_defaults(monkeypatch: pytest.MonkeyPatch) -> None:

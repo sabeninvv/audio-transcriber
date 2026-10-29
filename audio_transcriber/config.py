@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import StrEnum
 from os import environ
 from pathlib import Path
 from typing import Mapping
@@ -6,6 +7,7 @@ from typing import Mapping
 from audio_transcriber.exceptions import TranscriptionError
 
 DEFAULT_TRANSCRIPTION_MODEL = "gpt-transcribe"
+DEFAULT_ELEVENLABS_MODEL = "scribe_v2"
 DEFAULT_DIARIZATION_MODEL = "gpt-4o-transcribe-diarize"
 DEFAULT_SUBTITLE_MODEL = "whisper-1"
 # Префикс моделей OpenAI в каталоге OpenRouter.
@@ -32,9 +34,32 @@ DEFAULT_TRANSCRIPTION_PROMPT = (
 FORBIDDEN_KEYWORD_CHARS = ("<", ">", "\n", "\r")
 
 
+class TranscriptionProvider(StrEnum):
+    OPENAI = "openai"
+    ELEVENLABS = "elevenlabs"
+
+
+# Переменная окружения с ключом для каждого провайдера.
+API_KEY_ENV_NAMES = {
+    TranscriptionProvider.OPENAI: "OPENAI_API_KEY",
+    TranscriptionProvider.ELEVENLABS: "API_ELEVENLABS_API_KEY",
+}
+
+
+# Настройки, которые есть только у OpenAI: для ElevenLabs явное значение — ошибка.
+OPENAI_ONLY_ENV_NAMES = (
+    "TRANSCRIPTION_PROMPT",
+    "TRANSCRIPTION_SUBTITLE_MODEL",
+    "TRANSCRIPTION_DIARIZATION_MODEL",
+    "TRANSCRIPTION_KNOWN_SPEAKER_NAMES",
+    "TRANSCRIPTION_KNOWN_SPEAKER_REFERENCES",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class TranscriptionConfig:
-    openai_api_key: str
+    api_key: str
+    provider: TranscriptionProvider = TranscriptionProvider.OPENAI
     model: str = DEFAULT_TRANSCRIPTION_MODEL
     prompt: str = DEFAULT_TRANSCRIPTION_PROMPT
     languages: tuple[str, ...] = DEFAULT_TRANSCRIPTION_LANGUAGES
@@ -52,19 +77,31 @@ class TranscriptionConfig:
 
 def load_config(env: Mapping[str, str] | None = None) -> TranscriptionConfig:
     source = env or environ
-    openai_api_key = source.get("OPENAI_API_KEY")
-    if not openai_api_key:
-        raise TranscriptionError("OPENAI_API_KEY environment variable is required.")
+    provider = _parse_provider(source.get("TRANSCRIPTION_PROVIDER", TranscriptionProvider.OPENAI))
+    api_key_env_name = API_KEY_ENV_NAMES[provider]
+    api_key = source.get(api_key_env_name)
+    if not api_key:
+        raise TranscriptionError(f"{api_key_env_name} environment variable is required.")
+    if provider is TranscriptionProvider.ELEVENLABS:
+        unsupported = [name for name in OPENAI_ONLY_ENV_NAMES if name in source]
+        if unsupported:
+            raise TranscriptionError(f"ElevenLabs does not support: {', '.join(unsupported)}.")
 
-    model = source.get("TRANSCRIPTION_MODEL", DEFAULT_TRANSCRIPTION_MODEL).strip()
+    default_model = (
+        DEFAULT_ELEVENLABS_MODEL
+        if provider is TranscriptionProvider.ELEVENLABS
+        else DEFAULT_TRANSCRIPTION_MODEL
+    )
+    model = source.get("TRANSCRIPTION_MODEL", default_model).strip()
     prompt = source.get("TRANSCRIPTION_PROMPT", DEFAULT_TRANSCRIPTION_PROMPT).strip()
     languages = _parse_csv_values(
         source.get("TRANSCRIPTION_LANGUAGES"),
         default=DEFAULT_TRANSCRIPTION_LANGUAGES,
     )
+    # keyterms у ElevenLabs дороже запрос на 20%, поэтому шлём только явно заданные.
     keywords = _parse_csv_values(
         source.get("TRANSCRIPTION_KEYWORDS"),
-        default=DEFAULT_TRANSCRIPTION_KEYWORDS,
+        default=DEFAULT_TRANSCRIPTION_KEYWORDS if provider is TranscriptionProvider.OPENAI else (),
     )
     _validate_keywords(keywords)
 
@@ -81,7 +118,10 @@ def load_config(env: Mapping[str, str] | None = None) -> TranscriptionConfig:
     )
     diarization_model = source.get("TRANSCRIPTION_DIARIZATION_MODEL", DEFAULT_DIARIZATION_MODEL).strip()
     subtitle_model = source.get("TRANSCRIPTION_SUBTITLE_MODEL", DEFAULT_SUBTITLE_MODEL).strip()
-    if subtitle_model.removeprefix(OPENAI_MODEL_PREFIX) != DEFAULT_SUBTITLE_MODEL:
+    if (
+        provider is TranscriptionProvider.OPENAI
+        and subtitle_model.removeprefix(OPENAI_MODEL_PREFIX) != DEFAULT_SUBTITLE_MODEL
+    ):
         # SRT-путь опирается на verbose_json и compression_ratio, которые отдаёт только whisper.
         raise TranscriptionError(
             f"TRANSCRIPTION_SUBTITLE_MODEL must be {DEFAULT_SUBTITLE_MODEL} "
@@ -105,7 +145,8 @@ def load_config(env: Mapping[str, str] | None = None) -> TranscriptionConfig:
         )
 
     return TranscriptionConfig(
-        openai_api_key=openai_api_key,
+        api_key=api_key,
+        provider=provider,
         model=model,
         prompt=prompt,
         languages=languages,
@@ -117,6 +158,14 @@ def load_config(env: Mapping[str, str] | None = None) -> TranscriptionConfig:
         known_speaker_names=known_speaker_names,
         known_speaker_references=known_speaker_references,
     )
+
+
+def _parse_provider(raw_value: str) -> TranscriptionProvider:
+    try:
+        return TranscriptionProvider(raw_value.strip().lower())
+    except ValueError as error:
+        allowed = ", ".join(TranscriptionProvider)
+        raise TranscriptionError(f"TRANSCRIPTION_PROVIDER must be one of: {allowed}.") from error
 
 
 def _parse_csv_values(raw_value: str | None, *, default: tuple[str, ...] = ()) -> tuple[str, ...]:

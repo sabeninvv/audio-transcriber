@@ -18,9 +18,14 @@ from audio_transcriber.audio import (
 from audio_transcriber.config import (
     SUBTITLE_CHUNK_MAX_DURATION_SECONDS,
     TranscriptionConfig,
+    TranscriptionProvider,
     load_config,
 )
-from audio_transcriber.exceptions import AudioChunkingError, OpenAITranscriptionError
+from audio_transcriber.elevenlabs_client import ElevenLabsTranscriptionClient
+from audio_transcriber.exceptions import (
+    AudioChunkingError,
+    TranscriptionError,
+)
 from audio_transcriber.models import (
     OutputFormat,
     TranscriptionResult,
@@ -79,7 +84,10 @@ class TranscriptionService:
             )
             metadata = await asyncio.to_thread(probe_audio_metadata, normalized_path)
             chunk_max_duration_seconds = config.chunk_max_duration_seconds
-            if selected_format is OutputFormat.SRT:
+            if (
+                selected_format is OutputFormat.SRT
+                and config.provider is TranscriptionProvider.OPENAI
+            ):
                 # whisper-1 repeats its previous window on long requests.
                 chunk_max_duration_seconds = min(
                     chunk_max_duration_seconds,
@@ -108,12 +116,10 @@ class TranscriptionService:
                         chunk_path,
                         prompt_suffix=prompt_suffix,
                     )
-                except OpenAITranscriptionError:
+                except TranscriptionError:
                     raise
                 except Exception as error:
-                    raise OpenAITranscriptionError(
-                        "OpenAI transcription request failed."
-                    ) from error
+                    raise TranscriptionError("Transcription request failed.") from error
                 transcript_chunks.append(
                     TranscriptionResult(
                         text=chunk_result.text,
@@ -256,19 +262,32 @@ async def transcribe_audio(
     config = load_config()
     if selected_format is OutputFormat.SRT:
         ensure_subtitles_allowed(diarization_enabled=config.diarization_enabled)
-    client = OpenAITranscriptionClient(
-        api_key=config.openai_api_key,
-        model=config.model,
-        prompt=config.prompt,
-        languages=config.languages,
-        keywords=config.keywords,
-        diarization_enabled=config.diarization_enabled,
-        diarization_model=config.diarization_model,
-        subtitle_model=config.subtitle_model,
-        known_speaker_names=config.known_speaker_names,
-        known_speaker_references=config.known_speaker_references,
-        timestamps_enabled=selected_format is OutputFormat.SRT,
-    )
+    timestamps_enabled = selected_format is OutputFormat.SRT
+    client: TranscriptionClient
+    match config.provider:
+        case TranscriptionProvider.OPENAI:
+            client = OpenAITranscriptionClient(
+                api_key=config.api_key,
+                model=config.model,
+                prompt=config.prompt,
+                languages=config.languages,
+                keywords=config.keywords,
+                diarization_enabled=config.diarization_enabled,
+                diarization_model=config.diarization_model,
+                subtitle_model=config.subtitle_model,
+                known_speaker_names=config.known_speaker_names,
+                known_speaker_references=config.known_speaker_references,
+                timestamps_enabled=timestamps_enabled,
+            )
+        case TranscriptionProvider.ELEVENLABS:
+            client = ElevenLabsTranscriptionClient(
+                api_key=config.api_key,
+                model=config.model,
+                languages=config.languages,
+                keywords=config.keywords,
+                diarization_enabled=config.diarization_enabled,
+                timestamps_enabled=timestamps_enabled,
+            )
     service = TranscriptionService(client)
     return await service.transcribe_audio(
         input_path,

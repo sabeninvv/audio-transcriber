@@ -1,13 +1,13 @@
 # audio-transcriber
 
-Async Python module for transcribing local media files with the OpenAI Audio API.
+Async Python module for transcribing local media files with the OpenAI Audio API or ElevenLabs Speech-to-Text.
 
 ## Requirements
 
 - Python `3.14` (pinned in `.python-version`)
 - [`uv`](https://docs.astral.sh/uv/)
 - `ffmpeg` and `ffprobe` available on `PATH`
-- `OPENAI_API_KEY` in the environment (an OpenAI or OpenRouter key)
+- `OPENAI_API_KEY` (an OpenAI or OpenRouter key) or `API_ELEVENLABS_API_KEY` in the environment
 
 ## Install Dependencies
 
@@ -74,11 +74,13 @@ The module:
 
 Required:
 
-- `OPENAI_API_KEY`
+- `OPENAI_API_KEY` for `TRANSCRIPTION_PROVIDER=openai` (default)
+- `API_ELEVENLABS_API_KEY` for `TRANSCRIPTION_PROVIDER=elevenlabs`
 
 Optional quality controls:
 
-- `TRANSCRIPTION_MODEL` (default: `gpt-transcribe`)
+- `TRANSCRIPTION_PROVIDER` (`openai` or `elevenlabs`, default: `openai`)
+- `TRANSCRIPTION_MODEL` (default: `gpt-transcribe`, `scribe_v2` for ElevenLabs)
 - `TRANSCRIPTION_SUBTITLE_MODEL` (default: `whisper-1`, used for SRT output; only `whisper-1` or `openai/whisper-1`)
 - `TRANSCRIPTION_PROMPT`
 - `TRANSCRIPTION_LANGUAGES` (comma-separated, default: `ru,en`)
@@ -119,6 +121,23 @@ Limitations on OpenRouter:
 - Upstream requests time out after 60 seconds.
 
 To switch back to OpenAI, unset `OPENAI_BASE_URL`, put an OpenAI key into `OPENAI_API_KEY`, and drop the `openai/` prefix from the models (or unset them to use the defaults). Keep one env file per provider and pick it with `uv run --env-file ...`; a value exported in the shell overrides the file.
+
+## ElevenLabs
+
+```bash
+TRANSCRIPTION_PROVIDER=elevenlabs
+API_ELEVENLABS_API_KEY=<elevenlabs key>
+```
+
+The module sends each chunk to `POST https://api.elevenlabs.io/v1/speech-to-text` with `scribe_v2`. Markdown, SRT and diarization work the same way as with OpenAI.
+
+Differences from OpenAI:
+
+- `TRANSCRIPTION_LANGUAGES` with one value is sent as `language_code`; several values leave language auto-detection on.
+- `TRANSCRIPTION_KEYWORDS` are sent as `keyterms` only when set explicitly: ElevenLabs charges 20% more for requests with keyterms, so the default keyword list is not used.
+- Scribe has no prompt, so previous-chunk context is not sent.
+- `TRANSCRIPTION_PROMPT`, `TRANSCRIPTION_SUBTITLE_MODEL`, `TRANSCRIPTION_DIARIZATION_MODEL`, `TRANSCRIPTION_KNOWN_SPEAKER_NAMES` and `TRANSCRIPTION_KNOWN_SPEAKER_REFERENCES` are OpenAI-only; setting any of them with ElevenLabs fails at startup.
+- SRT cues are built from word timestamps without 30-second windows.
 
 ## Telegram Bot Usage
 

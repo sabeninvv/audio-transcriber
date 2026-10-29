@@ -1,11 +1,13 @@
 [project]
 name = "audio-transcriber"
 version = "0.1.0"
-description = "Async mp3/wav/mp4/mov/avi transcription module with OpenAI and mp3 chunking"
+description = "Async mp3/wav/mp4/mov/avi transcription module with OpenAI or ElevenLabs and mp3 chunking"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "httpx>=0.28.1",
     "openai>=2.30.0",
+    "pydantic>=2.12.5",
 ]
 
 [dependency-groups]
