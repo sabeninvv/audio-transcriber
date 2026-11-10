@@ -151,6 +151,13 @@ class TranscriptionService:
             )
             if selected_format is OutputFormat.SRT:
                 payload = render_subtitles_srt(cues)
+                if not payload:
+                    has_text = any(chunk.text.strip() for chunk in transcript_chunks)
+                    logger.warning(
+                        "%s in %s: writing empty subtitles.",
+                        "Transcript has no timed cues" if has_text else "No speech found",
+                        source_path.name,
+                    )
                 output_name = generate_subtitle_filename(
                     source_stem=source_path.stem,
                     timestamp=generated_at,

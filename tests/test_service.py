@@ -1266,6 +1266,57 @@ async def test_service_writes_srt_on_one_timeline_across_chunks(
 
 
 @pytest.mark.asyncio
+async def test_service_writes_empty_srt_for_file_without_speech(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Файл без речи в режиме SRT -> пустой .srt и предупреждение, пакет не падает."""
+    input_path = tmp_path / "silence.mov"
+    input_path.write_bytes(b"source")
+    output_dir = tmp_path / "out"
+    config = TranscriptionConfig(api_key="test-key")
+    fake_client = FakeChunkTranscriber(responses=[TranscriptionResult(text="")])
+    generated_at = datetime(2026, 4, 7, 12, 30, 11, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(service_module, "validate_audio_path", lambda path: Path(path))
+    monkeypatch.setattr(service_module, "ensure_ffmpeg_available", lambda: None)
+
+    def fake_normalize(input_audio: str | Path, output_audio: str | Path, *, bitrate: str = "64k") -> Path:
+        target = Path(output_audio)
+        target.write_bytes(b"audio")
+        return target
+
+    monkeypatch.setattr(service_module, "normalize_to_mp3", fake_normalize)
+    monkeypatch.setattr(
+        service_module,
+        "probe_audio_metadata",
+        lambda path: AudioMetadata(duration_seconds=5.0, bitrate_bps=64_000),
+    )
+    caplog.set_level(logging.WARNING, logger="audio_transcriber.service")
+
+    service = TranscriptionService(fake_client, now_provider=lambda: generated_at)
+    result = await service.transcribe_audio(
+        input_path,
+        output_dir,
+        config=config,
+        output_format="srt",
+    )
+
+    assert result == output_dir / "silence_2026-04-07T12-30-11.srt"
+    assert result.read_text(encoding="utf-8") == ""
+    assert "No speech found in silence.mov" in caplog.text
+
+    # Текст есть, таймкодов нет: файл тоже пуст, но причина в логе названа другая.
+    fake_client = FakeChunkTranscriber(responses=[TranscriptionResult(text="привет")])
+    caplog.clear()
+    service = TranscriptionService(fake_client, now_provider=lambda: generated_at)
+    await service.transcribe_audio(input_path, output_dir, config=config, output_format="srt")
+
+    assert "Transcript has no timed cues in silence.mov" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_service_offsets_srt_after_resplitting_chunks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

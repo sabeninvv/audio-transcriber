@@ -1,3 +1,4 @@
+import logging
 import math
 import re
 from datetime import datetime
@@ -8,6 +9,10 @@ from audio_transcriber.models import TranscriptionSegment
 
 # ponytail: naive split, abbreviation list (Mr./т.е.) if false breaks matter
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?…])[^\S\n]+")
+# Реплика нулевой длины (слово с start == end) показывается столько, чтобы её успели прочитать.
+_MIN_CUE_MILLISECONDS = 1_000
+
+logger = logging.getLogger(__name__)
 
 
 def generate_markdown_filename(
@@ -71,21 +76,36 @@ def render_transcript_markdown(
 
 
 def render_subtitles_srt(segments: Sequence[TranscriptionSegment]) -> str:
-    if not segments:
-        raise TranscriptionError("SRT subtitles require at least one timed segment.")
+    """Собирает SRT из реплик; без реплик возвращает пустую строку.
 
+    Рендер идёт после платных запросов, поэтому шум в данных провайдера не роняет файл:
+    реплика без текста пропускается, реплика нулевой длины получает минимальную длительность.
+    """
     blocks: list[str] = []
-    for index, segment in enumerate(segments, start=1):
+    for position, segment in enumerate(segments):
         start_ms = _milliseconds(segment.start_seconds)
         end_ms = _milliseconds(segment.end_seconds)
-        if end_ms <= start_ms:
-            raise TranscriptionError("SRT subtitle interval is empty after rounding.")
         text = " ".join(segment.text.split())
         if not text:
-            raise TranscriptionError("SRT subtitle text is empty.")
+            logger.warning("Skipping SRT cue at %s: it has no text.", _format_srt_timestamp(start_ms))
+            continue
+        if end_ms <= start_ms:
+            end_ms = start_ms + _MIN_CUE_MILLISECONDS
+            if position + 1 < len(segments):
+                next_start_ms = _milliseconds(segments[position + 1].start_seconds)
+                if start_ms < next_start_ms < end_ms:
+                    end_ms = next_start_ms
+            logger.warning(
+                "SRT cue at %s has an empty interval: extended to %s.",
+                _format_srt_timestamp(start_ms),
+                _format_srt_timestamp(end_ms),
+            )
         blocks.append(
-            f"{index}\n{_format_srt_timestamp(start_ms)} --> {_format_srt_timestamp(end_ms)}\n{text}"
+            f"{len(blocks) + 1}\n"
+            f"{_format_srt_timestamp(start_ms)} --> {_format_srt_timestamp(end_ms)}\n{text}"
         )
+    if not blocks:
+        return ""
     return "\n\n".join(blocks) + "\n"
 
 

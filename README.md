@@ -110,6 +110,7 @@ Notes:
 - `gpt-4o-transcribe-diarize` does not support prompt/keywords and is intended only when speaker labeling is required.
 - SRT output uses `whisper-1` segment timestamps and splits audio into 30-second requests so the model does not repeat an earlier phrase. OpenAI plans to shut that model down on 2027-02-26.
 - SRT output cannot be combined with `TRANSCRIPTION_DIARIZATION_ENABLED=true`.
+- A file without recognized speech produces an empty `.srt` and a warning in the log. A cue with no text is skipped; a zero-length cue is shown for 1 second or until the next cue starts.
 
 ## OpenRouter
 

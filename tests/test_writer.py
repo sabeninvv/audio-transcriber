@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 
 import pytest
@@ -129,13 +130,60 @@ def test_render_subtitles_srt_rolls_milliseconds_into_minutes_and_hours() -> Non
     assert "00:59:59,000 --> 01:00:00,000\nhour\n" in rendered
 
 
-def test_render_subtitles_srt_rejects_interval_collapsed_by_rounding() -> None:
-    with pytest.raises(TranscriptionError, match="interval"):
-        render_subtitles_srt([TranscriptionSegment(1.0001, 1.0004, "", "too short")])
+def test_render_subtitles_srt_keeps_cue_with_interval_collapsed_by_rounding(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Реплика нулевой длины не роняет файл: конец сдвигается на 1 с, но не дальше следующей реплики."""
+    caplog.set_level(logging.WARNING, logger="audio_transcriber.writer")
+
+    rendered = render_subtitles_srt(
+        [
+            TranscriptionSegment(1.0, 1.0, "", "Да."),
+            TranscriptionSegment(1.4, 2.0, "", "next"),
+            TranscriptionSegment(5.0001, 5.0004, "", "last"),
+        ]
+    )
+
+    assert rendered == (
+        "1\n"
+        "00:00:01,000 --> 00:00:01,400\n"
+        "Да.\n"
+        "\n"
+        "2\n"
+        "00:00:01,400 --> 00:00:02,000\n"
+        "next\n"
+        "\n"
+        "3\n"
+        "00:00:05,000 --> 00:00:06,000\n"
+        "last\n"
+    )
+    assert caplog.text.count("empty interval") == 2
 
 
-def test_render_subtitles_srt_rejects_empty_input_and_blank_text() -> None:
-    with pytest.raises(TranscriptionError, match="segment"):
-        render_subtitles_srt([])
-    with pytest.raises(TranscriptionError, match="text"):
-        render_subtitles_srt([TranscriptionSegment(0.0, 1.0, "", "  ")])
+def test_render_subtitles_srt_skips_blank_text_and_keeps_numbering(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Реплика без текста пропускается, номера идут подряд по записанным репликам."""
+    caplog.set_level(logging.WARNING, logger="audio_transcriber.writer")
+
+    rendered = render_subtitles_srt(
+        [
+            TranscriptionSegment(0.0, 1.0, "", "  "),
+            TranscriptionSegment(1.0, 2.0, "", "hello"),
+        ]
+    )
+
+    assert rendered == "1\n00:00:01,000 --> 00:00:02,000\nhello\n"
+    assert "no text" in caplog.text
+
+
+def test_render_subtitles_srt_returns_empty_payload_without_cues() -> None:
+    """Файл без речи -> пустой SRT, а не ошибка."""
+    assert render_subtitles_srt([]) == ""
+    assert render_subtitles_srt([TranscriptionSegment(0.0, 1.0, "", "  ")]) == ""
+
+
+def test_render_subtitles_srt_rejects_invalid_time() -> None:
+    """Отрицательное время — сломанный ответ провайдера, а не тишина."""
+    with pytest.raises(TranscriptionError, match="invalid"):
+        render_subtitles_srt([TranscriptionSegment(-1.0, 1.0, "", "broken")])
