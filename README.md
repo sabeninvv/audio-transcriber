@@ -60,6 +60,10 @@ The public Python API accepts a single media file per call. `output_format` is `
 - `m4a`
 - `ogg`
 - `oga`
+- `mkv`
+- `m4v`
+- `flac`
+- `aac`
 
 The module:
 

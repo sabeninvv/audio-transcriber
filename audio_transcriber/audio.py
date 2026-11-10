@@ -17,8 +17,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_MP3_BITRATE = "64k"
 MP3_SAMPLES_PER_FRAME = 1152
 SUPPORTED_AUDIO_EXTENSIONS = {
+    ".aac",
     ".avi",
+    ".flac",
     ".m4a",
+    ".m4v",
+    ".mkv",
     ".mp3",
     ".mov",
     ".mp4",

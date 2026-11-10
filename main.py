@@ -6,14 +6,16 @@ import sys
 from pathlib import Path
 
 from audio_transcriber import transcribe_audio
-from audio_transcriber.audio import is_supported_audio_path
+from audio_transcriber.audio import SUPPORTED_AUDIO_EXTENSIONS, is_supported_audio_path
 from audio_transcriber.exceptions import TranscriptionError
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Собирает CLI-парсер; список форматов в подсказках берётся из SUPPORTED_AUDIO_EXTENSIONS."""
+    formats = ", ".join(sorted(SUPPORTED_AUDIO_EXTENSIONS))
     parser = argparse.ArgumentParser(
         description=(
-            "Transcribe a local media file (mp3/wav/mp4/avi/webm/m4a/ogg/oga) "
+            f"Transcribe a local media file ({formats}) "
             "or a directory of media "
             "files into markdown transcripts or SRT subtitles."
         ),
@@ -22,8 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--input",
         required=True,
         help=(
-            "Path to the input media file or directory "
-            "(.mp3, .wav, .mp4, .mov, .avi, .webm, .m4a, .ogg, or .oga)."
+            f"Path to the input media file or directory ({formats})."
         ),
     )
     parser.add_argument(
