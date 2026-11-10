@@ -69,12 +69,16 @@ class OpenAITranscriptionClient:
         *,
         prompt_suffix: str | None = None,
     ) -> TranscriptionResult:
+        """Распознаёт чанк выбранным режимом; тихий чанк с пустым text даёт пустой результат."""
         try:
             with path.open("rb") as audio_file:
                 if self._timestamps_enabled:
                     response = await self._create_timestamped_transcription(audio_file=audio_file)
+                    text = _extract_transcript_text(response)
+                    if not text.strip():
+                        return TranscriptionResult(text=text)
                     return TranscriptionResult(
-                        text=_extract_transcript_text(response),
+                        text=text,
                         segments=_extract_timestamped_segments(response),
                     )
 
@@ -180,8 +184,9 @@ def _extract_response_text(error: OpenAIError) -> str | None:
 
 
 def _extract_transcript_text(response: Any) -> str:
+    """Достаёт текст ответа; пустая строка допустима: так API отвечает на чанк без речи."""
     text = _coerce_response_value(response, "text")
-    if not isinstance(text, str) or not text.strip():
+    if not isinstance(text, str):
         raise OpenAITranscriptionError("OpenAI response does not include transcript text.")
     return text
 

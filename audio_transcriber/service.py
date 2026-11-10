@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +42,9 @@ from audio_transcriber.writer import (
     render_subtitles_srt,
     render_transcript_markdown,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class TranscriptionClient(Protocol):
@@ -121,6 +125,13 @@ class TranscriptionService:
                     raise
                 except Exception as error:
                     raise TranscriptionError("Transcription request failed.") from error
+                if not chunk_result.text.strip():
+                    logger.warning(
+                        "Chunk %s of %s has no transcript text: %s",
+                        chunk_index + 1,
+                        len(chunk_paths),
+                        chunk_path,
+                    )
                 transcript_chunks.append(
                     TranscriptionResult(
                         text=chunk_result.text,

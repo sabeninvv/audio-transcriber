@@ -63,7 +63,10 @@ class ElevenLabsTranscriptionClient:
         *,
         prompt_suffix: str | None = None,
     ) -> TranscriptionResult:
-        """Scribe не принимает промпт, поэтому prompt_suffix игнорируется."""
+        """Распознаёт чанк через Scribe; пустой text при 200 считается тишиной.
+
+        Scribe не принимает промпт, поэтому prompt_suffix игнорируется.
+        """
         form: dict[str, str | bool | list[str]] = {
             "model_id": self._model,
             "diarize": self._diarization_enabled,
@@ -111,8 +114,6 @@ class ElevenLabsTranscriptionClient:
             payload = _SpeechToTextResponse.model_validate_json(response.content)
         except ValidationError as error:
             raise ElevenLabsTranscriptionError("ElevenLabs response has an unexpected shape.") from error
-        if not payload.text.strip():
-            raise ElevenLabsTranscriptionError("ElevenLabs response does not include transcript text.")
 
         if not (self._diarization_enabled or self._timestamps_enabled):
             return TranscriptionResult(text=payload.text)

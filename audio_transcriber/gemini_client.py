@@ -75,6 +75,7 @@ class GeminiTranscriptionClient:
         *,
         prompt_suffix: str | None = None,
     ) -> TranscriptionResult:
+        """Транскрибирует чанк через generateContent; пустой текст при STOP считается тишиной."""
         audio_data = await asyncio.to_thread(_encode_audio, path)
         body = {
             "contents": [
@@ -145,10 +146,7 @@ class GeminiTranscriptionClient:
             raise GeminiTranscriptionError(
                 f"Gemini transcription stopped with finish_reason={candidate.finish_reason}."
             )
-        text = "".join(part.text for part in candidate.content.parts)
-        if not text.strip():
-            raise GeminiTranscriptionError("Gemini response does not include transcript text.")
-        return TranscriptionResult(text=text)
+        return TranscriptionResult(text="".join(part.text for part in candidate.content.parts))
 
     def _instruction(self) -> str:
         lines = [_TRANSCRIBE_INSTRUCTION, self._prompt]

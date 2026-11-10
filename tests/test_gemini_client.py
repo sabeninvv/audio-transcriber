@@ -76,6 +76,17 @@ async def test_transcribe_file_skips_empty_hints(chunk_path: Path) -> None:
     assert "Glossary:" not in text
 
 
+@pytest.mark.asyncio
+async def test_transcribe_file_returns_empty_text_for_silent_chunk(chunk_path: Path) -> None:
+    """Тихий чанк: STOP с пустым текстом -> пустой результат, а не ошибка."""
+    api = FakeHttpApi(response=get_gemini_response(""))
+    client = GeminiTranscriptionClient(api_key=API_KEY, transport=api.transport())
+
+    result = await client.transcribe_file(chunk_path)
+
+    assert result.text == ""
+
+
 @pytest.mark.parametrize(
     "response",
     [
@@ -83,16 +94,15 @@ async def test_transcribe_file_skips_empty_hints(chunk_path: Path) -> None:
         httpx.Response(200, json={"candidates": "broken"}),
         httpx.Response(200, json={"promptFeedback": {"blockReason": "SAFETY"}}),
         get_gemini_response(TRANSCRIPT_TEXT, finish_reason="MAX_TOKENS"),
-        get_gemini_response("   "),
     ],
-    ids=["http-error", "unexpected-shape", "no-candidates", "max-tokens", "blank-text"],
+    ids=["http-error", "unexpected-shape", "no-candidates", "max-tokens"],
 )
 @pytest.mark.asyncio
 async def test_transcribe_file_rejects_failed_or_incomplete_response(
     chunk_path: Path,
     response: httpx.Response,
 ) -> None:
-    """Ошибка API, неожиданная форма, блокировка, обрезка или пустой текст -> GeminiTranscriptionError."""
+    """Ошибка API, неожиданная форма, блокировка или обрезка -> GeminiTranscriptionError."""
     api = FakeHttpApi(response=response)
     client = GeminiTranscriptionClient(api_key=API_KEY, transport=api.transport())
 

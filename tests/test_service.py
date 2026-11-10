@@ -259,6 +259,38 @@ async def test_openai_transcription_client_returns_response_text(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_openai_transcription_client_returns_empty_text_for_silent_chunk(tmp_path: Path) -> None:
+    """Тихий чанк: пустой text -> пустой результат, а не ошибка."""
+    chunk_path = tmp_path / "chunk.mp3"
+    chunk_path.write_bytes(b"audio")
+    endpoint = FakeTranscriptionsEndpoint(response=SimpleNamespace(text=""))
+    client = OpenAITranscriptionClient(api_key="test-key", client=FakeOpenAISdkClient(endpoint))
+
+    result = await client.transcribe_file(chunk_path)
+
+    assert result == TranscriptionResult(text="")
+
+
+@pytest.mark.asyncio
+async def test_openai_transcription_client_returns_empty_subtitles_for_silent_chunk(
+    tmp_path: Path,
+) -> None:
+    """Тихий чанк в режиме SRT: пустой text без сегментов -> пустой результат, а не ошибка."""
+    chunk_path = tmp_path / "chunk.mp3"
+    chunk_path.write_bytes(b"audio")
+    endpoint = FakeTranscriptionsEndpoint(response={"text": "", "segments": []})
+    client = OpenAITranscriptionClient(
+        api_key="test-key",
+        timestamps_enabled=True,
+        client=FakeOpenAISdkClient(endpoint),
+    )
+
+    result = await client.transcribe_file(chunk_path)
+
+    assert result == TranscriptionResult(text="")
+
+
+@pytest.mark.asyncio
 async def test_openai_transcription_client_sends_hints_for_provider_prefixed_model(
     tmp_path: Path,
 ) -> None:

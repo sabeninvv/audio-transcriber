@@ -148,21 +148,36 @@ def test_group_words_closes_segment_longer_than_limit() -> None:
     [
         httpx.Response(401, json={"detail": {"status": "invalid_api_key"}}),
         httpx.Response(200, json={"detail": "accepted"}),
-        get_elevenlabs_response("   "),
     ],
-    ids=["http-error", "unexpected-shape", "blank-text"],
+    ids=["http-error", "unexpected-shape"],
 )
 @pytest.mark.asyncio
-async def test_transcribe_file_rejects_failed_or_empty_response(
+async def test_transcribe_file_rejects_failed_or_malformed_response(
     chunk_path: Path,
     response: httpx.Response,
 ) -> None:
-    """Ошибка API, неожиданная форма или пустой текст -> ElevenLabsTranscriptionError."""
+    """Ошибка API или неожиданная форма -> ElevenLabsTranscriptionError."""
     api = FakeHttpApi(response=response)
     client = ElevenLabsTranscriptionClient(api_key=API_KEY, transport=api.transport())
 
     with pytest.raises(ElevenLabsTranscriptionError):
         await client.transcribe_file(chunk_path)
+
+
+@pytest.mark.asyncio
+async def test_transcribe_file_returns_empty_text_for_silent_chunk(chunk_path: Path) -> None:
+    """Тихий чанк: 200 с пустым text и без слов -> пустой результат, а не ошибка."""
+    api = FakeHttpApi(response=get_elevenlabs_response(""))
+    client = ElevenLabsTranscriptionClient(
+        api_key=API_KEY,
+        timestamps_enabled=True,
+        transport=api.transport(),
+    )
+
+    result = await client.transcribe_file(chunk_path)
+
+    assert result.text == ""
+    assert result.segments == ()
 
 
 @pytest.mark.asyncio
